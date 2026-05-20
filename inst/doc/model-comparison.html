@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+
+
+<title>Comparing ML-UMR, STC, and Naive Methods</title>
+
+<script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
+// be compatible with the behavior of Pandoc < 2.8).
+document.addEventListener('DOMContentLoaded', function(e) {
+  var hs = document.querySelectorAll("div.section[class*='level'] > :first-child");
+  var i, h, a;
+  for (i = 0; i < hs.length; i++) {
+    h = hs[i];
+    if (!/^h[1-6]$/i.test(h.tagName)) continue;  // it should be a header h1-h6
+    a = h.attributes;
+    while (a.length > 0) h.removeAttribute(a[0].name);
+  }
+});
+</script>
+
+<style type="text/css">
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+span.underline{text-decoration: underline;}
+div.column{display: inline-block; vertical-align: top; width: 50%;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+</style>
+
+
+
+<style type="text/css">
+code {
+white-space: pre;
+}
+.sourceCode {
+overflow: visible;
+}
+</style>
+<style type="text/css" data-origin="pandoc">
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+<script>
+// apply pandoc div.sourceCode style to pre.sourceCode instead
+(function() {
+  var sheets = document.styleSheets;
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].ownerNode.dataset["origin"] !== "pandoc") continue;
+    try { var rules = sheets[i].cssRules; } catch (e) { continue; }
+    var j = 0;
+    while (j < rules.length) {
+      var rule = rules[j];
+      // check if there is a div.sourceCode rule
+      if (rule.type !== rule.STYLE_RULE || rule.selectorText !== "div.sourceCode") {
+        j++;
+        continue;
+      }
+      var style = rule.style.cssText;
+      // check if color or background-color is set
+      if (rule.style.color === '' && rule.style.backgroundColor === '') {
+        j++;
+        continue;
+      }
+      // replace div.sourceCode by a pre.sourceCode rule
+      sheets[i].deleteRule(j);
+      sheets[i].insertRule('pre.sourceCode{' + style + '}', j);
+    }
+  }
+})();
+</script>
+
+
+
+
+<style type="text/css">body {
+background-color: #fff;
+margin: 1em auto;
+max-width: 700px;
+overflow: visible;
+padding-left: 2em;
+padding-right: 2em;
+font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+font-size: 14px;
+line-height: 1.35;
+}
+#TOC {
+clear: both;
+margin: 0 0 10px 10px;
+padding: 4px;
+width: 400px;
+border: 1px solid #CCCCCC;
+border-radius: 5px;
+background-color: #f6f6f6;
+font-size: 13px;
+line-height: 1.3;
+}
+#TOC .toctitle {
+font-weight: bold;
+font-size: 15px;
+margin-left: 5px;
+}
+#TOC ul {
+padding-left: 40px;
+margin-left: -1.5em;
+margin-top: 5px;
+margin-bottom: 5px;
+}
+#TOC ul ul {
+margin-left: -2em;
+}
+#TOC li {
+line-height: 16px;
+}
+table {
+margin: 1em auto;
+border-width: 1px;
+border-color: #DDDDDD;
+border-style: outset;
+border-collapse: collapse;
+}
+table th {
+border-width: 2px;
+padding: 5px;
+border-style: inset;
+}
+table td {
+border-width: 1px;
+border-style: inset;
+line-height: 18px;
+padding: 5px 5px;
+}
+table, table th, table td {
+border-left-style: none;
+border-right-style: none;
+}
+table thead, table tr.even {
+background-color: #f7f7f7;
+}
+p {
+margin: 0.5em 0;
+}
+blockquote {
+background-color: #f6f6f6;
+padding: 0.25em 0.75em;
+}
+hr {
+border-style: solid;
+border: none;
+border-top: 1px solid #777;
+margin: 28px 0;
+}
+dl {
+margin-left: 0;
+}
+dl dd {
+margin-bottom: 13px;
+margin-left: 13px;
+}
+dl dt {
+font-weight: bold;
+}
+ul {
+margin-top: 0;
+}
+ul li {
+list-style: circle outside;
+}
+ul ul {
+margin-bottom: 0;
+}
+pre, code {
+background-color: #f7f7f7;
+border-radius: 3px;
+color: #333;
+white-space: pre-wrap; 
+}
+pre {
+border-radius: 3px;
+margin: 5px 0px 10px 0px;
+padding: 10px;
+}
+pre:not([class]) {
+background-color: #f7f7f7;
+}
+code {
+font-family: Consolas, Monaco, 'Courier New', monospace;
+font-size: 85%;
+}
+p > code, li > code {
+padding: 2px 0px;
+}
+div.figure {
+text-align: center;
+}
+img {
+background-color: #FFFFFF;
+padding: 2px;
+border: 1px solid #DDDDDD;
+border-radius: 3px;
+border: 1px solid #CCCCCC;
+margin: 0 5px;
+}
+h1 {
+margin-top: 0;
+font-size: 35px;
+line-height: 40px;
+}
+h2 {
+border-bottom: 4px solid #f7f7f7;
+padding-top: 10px;
+padding-bottom: 2px;
+font-size: 145%;
+}
+h3 {
+border-bottom: 2px solid #f7f7f7;
+padding-top: 10px;
+font-size: 120%;
+}
+h4 {
+border-bottom: 1px solid #f7f7f7;
+margin-left: 8px;
+font-size: 105%;
+}
+h5, h6 {
+border-bottom: 1px solid #ccc;
+font-size: 105%;
+}
+a {
+color: #0033dd;
+text-decoration: none;
+}
+a:hover {
+color: #6666ff; }
+a:visited {
+color: #800080; }
+a:visited:hover {
+color: #BB00BB; }
+a[href^="http:"] {
+text-decoration: underline; }
+a[href^="https:"] {
+text-decoration: underline; }
+
+code > span.kw { color: #555; font-weight: bold; } 
+code > span.dt { color: #902000; } 
+code > span.dv { color: #40a070; } 
+code > span.bn { color: #d14; } 
+code > span.fl { color: #d14; } 
+code > span.ch { color: #d14; } 
+code > span.st { color: #d14; } 
+code > span.co { color: #888888; font-style: italic; } 
+code > span.ot { color: #007020; } 
+code > span.al { color: #ff0000; font-weight: bold; } 
+code > span.fu { color: #900; font-weight: bold; } 
+code > span.er { color: #a61717; background-color: #e3d2d2; } 
+</style>
+
+
+
+
+</head>
+
+<body>
+
+
+
+
+<h1 class="title toc-ignore">Comparing ML-UMR, STC, and Naive
+Methods</h1>
+
+
+
+<div id="why-compare-methods" class="section level2">
+<h2>Why compare methods?</h2>
+<p>Unanchored indirect treatment comparisons (ITCs) rely on strong
+assumptions that cannot be fully verified from data alone. Running
+multiple methods and comparing their results is an important part of any
+ITC analysis: a sensitivity check that reveals how conclusions depend on
+modeling choices.</p>
+<p>mlumr provides three methods in a single package with a unified data
+interface, making side-by-side comparison straightforward.</p>
+<table>
+<colgroup>
+<col width="17%" />
+<col width="23%" />
+<col width="23%" />
+<col width="34%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Method</th>
+<th>Adjustment</th>
+<th>Framework</th>
+<th>Key assumption</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Naive</td>
+<td>None</td>
+<td>Frequentist</td>
+<td>Populations are exchangeable</td>
+</tr>
+<tr class="even">
+<td>STC</td>
+<td>Outcome regression</td>
+<td>Frequentist</td>
+<td>Correct outcome model specification</td>
+</tr>
+<tr class="odd">
+<td>ML-UMR SPFA</td>
+<td>Joint Bayesian model</td>
+<td>Bayesian</td>
+<td>Shared prognostic effects (SPFA)</td>
+</tr>
+<tr class="even">
+<td>ML-UMR Relaxed</td>
+<td>Joint Bayesian model</td>
+<td>Bayesian</td>
+<td>Correct specification and enough information/prior support for
+treatment-specific effects</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div id="setup-shared-data-preparation" class="section level2">
+<h2>Setup: shared data preparation</h2>
+<p>All three methods start from the same <code>mlumr_data</code> object.
+STC and ML-UMR benefit from integration points; the naive method ignores
+them.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">library</span>(mlumr)</span>
+<span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">2026</span>)</span>
+<span id="cb1-3"><a href="#cb1-3" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" tabindex="-1"></a><span class="co"># --- Simulate IPD (index treatment) ---</span></span>
+<span id="cb1-5"><a href="#cb1-5" tabindex="-1"></a>n_A <span class="ot">&lt;-</span> <span class="dv">500</span></span>
+<span id="cb1-6"><a href="#cb1-6" tabindex="-1"></a>age_A <span class="ot">&lt;-</span> <span class="fu">rbinom</span>(n_A, <span class="dv">1</span>, <span class="fl">0.40</span>)</span>
+<span id="cb1-7"><a href="#cb1-7" tabindex="-1"></a>sex_A <span class="ot">&lt;-</span> <span class="fu">rbinom</span>(n_A, <span class="dv">1</span>, <span class="fl">0.55</span>)</span>
+<span id="cb1-8"><a href="#cb1-8" tabindex="-1"></a></span>
+<span id="cb1-9"><a href="#cb1-9" tabindex="-1"></a><span class="co"># True DGP: logit(p) = -0.5 + 0.8*age - 0.3*sex</span></span>
+<span id="cb1-10"><a href="#cb1-10" tabindex="-1"></a>logit_p_A <span class="ot">&lt;-</span> <span class="sc">-</span><span class="fl">0.5</span> <span class="sc">+</span> <span class="fl">0.8</span> <span class="sc">*</span> age_A <span class="sc">-</span> <span class="fl">0.3</span> <span class="sc">*</span> sex_A</span>
+<span id="cb1-11"><a href="#cb1-11" tabindex="-1"></a>y_A <span class="ot">&lt;-</span> <span class="fu">rbinom</span>(n_A, <span class="dv">1</span>, <span class="fu">plogis</span>(logit_p_A))</span>
+<span id="cb1-12"><a href="#cb1-12" tabindex="-1"></a></span>
+<span id="cb1-13"><a href="#cb1-13" tabindex="-1"></a>ipd_df <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
+<span id="cb1-14"><a href="#cb1-14" tabindex="-1"></a>  <span class="at">trt =</span> <span class="st">&quot;Drug_A&quot;</span>, <span class="at">outcome =</span> y_A,</span>
+<span id="cb1-15"><a href="#cb1-15" tabindex="-1"></a>  <span class="at">age_group =</span> age_A, <span class="at">sex =</span> sex_A</span>
+<span id="cb1-16"><a href="#cb1-16" tabindex="-1"></a>)</span>
+<span id="cb1-17"><a href="#cb1-17" tabindex="-1"></a></span>
+<span id="cb1-18"><a href="#cb1-18" tabindex="-1"></a><span class="co"># --- Simulate AgD (comparator) ---</span></span>
+<span id="cb1-19"><a href="#cb1-19" tabindex="-1"></a><span class="co"># Same covariate effects, different intercept and covariate distribution</span></span>
+<span id="cb1-20"><a href="#cb1-20" tabindex="-1"></a>n_B <span class="ot">&lt;-</span> <span class="dv">400</span></span>
+<span id="cb1-21"><a href="#cb1-21" tabindex="-1"></a>r_B <span class="ot">&lt;-</span> <span class="dv">148</span>  <span class="co"># pre-computed from true model with different covariates</span></span>
+<span id="cb1-22"><a href="#cb1-22" tabindex="-1"></a></span>
+<span id="cb1-23"><a href="#cb1-23" tabindex="-1"></a>agd_df <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
+<span id="cb1-24"><a href="#cb1-24" tabindex="-1"></a>  <span class="at">trt =</span> <span class="st">&quot;Drug_B&quot;</span>, <span class="at">n_total =</span> n_B, <span class="at">n_events =</span> r_B,</span>
+<span id="cb1-25"><a href="#cb1-25" tabindex="-1"></a>  <span class="at">age_group_mean =</span> <span class="fl">0.35</span>, <span class="at">sex_mean =</span> <span class="fl">0.50</span></span>
+<span id="cb1-26"><a href="#cb1-26" tabindex="-1"></a>)</span>
+<span id="cb1-27"><a href="#cb1-27" tabindex="-1"></a></span>
+<span id="cb1-28"><a href="#cb1-28" tabindex="-1"></a><span class="co"># --- Prepare data ---</span></span>
+<span id="cb1-29"><a href="#cb1-29" tabindex="-1"></a>ipd <span class="ot">&lt;-</span> <span class="fu">set_ipd</span>(ipd_df, <span class="at">treatment =</span> <span class="st">&quot;trt&quot;</span>, <span class="at">outcome =</span> <span class="st">&quot;outcome&quot;</span>,</span>
+<span id="cb1-30"><a href="#cb1-30" tabindex="-1"></a>               <span class="at">covariates =</span> <span class="fu">c</span>(<span class="st">&quot;age_group&quot;</span>, <span class="st">&quot;sex&quot;</span>))</span>
+<span id="cb1-31"><a href="#cb1-31" tabindex="-1"></a>agd <span class="ot">&lt;-</span> <span class="fu">set_agd</span>(agd_df, <span class="at">treatment =</span> <span class="st">&quot;trt&quot;</span>,</span>
+<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>               <span class="at">outcome_n =</span> <span class="st">&quot;n_total&quot;</span>, <span class="at">outcome_r =</span> <span class="st">&quot;n_events&quot;</span>,</span>
+<span id="cb1-33"><a href="#cb1-33" tabindex="-1"></a>               <span class="at">cov_means =</span> <span class="fu">c</span>(<span class="st">&quot;age_group_mean&quot;</span>, <span class="st">&quot;sex_mean&quot;</span>),</span>
+<span id="cb1-34"><a href="#cb1-34" tabindex="-1"></a>               <span class="at">cov_types =</span> <span class="fu">c</span>(<span class="st">&quot;binary&quot;</span>, <span class="st">&quot;binary&quot;</span>))</span>
+<span id="cb1-35"><a href="#cb1-35" tabindex="-1"></a></span>
+<span id="cb1-36"><a href="#cb1-36" tabindex="-1"></a>dat <span class="ot">&lt;-</span> <span class="fu">combine_data</span>(ipd, agd)</span>
+<span id="cb1-37"><a href="#cb1-37" tabindex="-1"></a></span>
+<span id="cb1-38"><a href="#cb1-38" tabindex="-1"></a><span class="co"># Add integration points (used by STC and ML-UMR)</span></span>
+<span id="cb1-39"><a href="#cb1-39" tabindex="-1"></a>dat <span class="ot">&lt;-</span> <span class="fu">add_integration</span>(</span>
+<span id="cb1-40"><a href="#cb1-40" tabindex="-1"></a>  dat, <span class="at">n_int =</span> <span class="dv">64</span>,</span>
+<span id="cb1-41"><a href="#cb1-41" tabindex="-1"></a>  <span class="at">age_group =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> age_group_mean),</span>
+<span id="cb1-42"><a href="#cb1-42" tabindex="-1"></a>  <span class="at">sex =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> sex_mean)</span>
+<span id="cb1-43"><a href="#cb1-43" tabindex="-1"></a>)</span></code></pre></div>
+</div>
+<div id="running-all-three-methods" class="section level2">
+<h2>Running all three methods</h2>
+<div id="naive-estimate" class="section level3">
+<h3>Naive estimate</h3>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a>res_naive <span class="ot">&lt;-</span> <span class="fu">naive</span>(dat)</span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a><span class="fu">print</span>(res_naive)</span>
+<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a><span class="co">#&gt; Naive Unadjusted Indirect Comparison</span></span>
+<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a><span class="co">#&gt; =====================================</span></span>
+<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb2-6"><a href="#cb2-6" tabindex="-1"></a><span class="co">#&gt; Treatments: Drug_A vs Drug_B </span></span>
+<span id="cb2-7"><a href="#cb2-7" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb2-8"><a href="#cb2-8" tabindex="-1"></a><span class="co">#&gt; Event rates:</span></span>
+<span id="cb2-9"><a href="#cb2-9" tabindex="-1"></a><span class="co">#&gt;   Index (IPD):      0.410 (205/500)</span></span>
+<span id="cb2-10"><a href="#cb2-10" tabindex="-1"></a><span class="co">#&gt;   Comparator (AgD): 0.370 (148/400)</span></span>
+<span id="cb2-11"><a href="#cb2-11" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb2-12"><a href="#cb2-12" tabindex="-1"></a><span class="co">#&gt; Log Odds Ratio: 0.1683 (SE: 0.1378)</span></span>
+<span id="cb2-13"><a href="#cb2-13" tabindex="-1"></a><span class="co">#&gt; 95% CI: [-0.1019, 0.4384]</span></span></code></pre></div>
+<p>The naive method ignores covariate differences between populations.
+It serves as a reference: if naive and adjusted estimates agree,
+covariate imbalance has little practical impact.</p>
+</div>
+<div id="stc-estimate" class="section level3">
+<h3>STC estimate</h3>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a>res_stc <span class="ot">&lt;-</span> <span class="fu">stc</span>(dat)</span>
+<span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a><span class="fu">print</span>(res_stc)</span>
+<span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a><span class="co">#&gt; Simulated Treatment Comparison (G-computation)</span></span>
+<span id="cb3-4"><a href="#cb3-4" tabindex="-1"></a><span class="co">#&gt; ===============================================</span></span>
+<span id="cb3-5"><a href="#cb3-5" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb3-6"><a href="#cb3-6" tabindex="-1"></a><span class="co">#&gt; Treatments: Drug_A vs Drug_B </span></span>
+<span id="cb3-7"><a href="#cb3-7" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb3-8"><a href="#cb3-8" tabindex="-1"></a><span class="co">#&gt; Marginalized P(Y=1|index trt, comp pop): 0.4013</span></span>
+<span id="cb3-9"><a href="#cb3-9" tabindex="-1"></a><span class="co">#&gt; Observed P(Y=1|comp trt, comp pop):      0.3700</span></span>
+<span id="cb3-10"><a href="#cb3-10" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb3-11"><a href="#cb3-11" tabindex="-1"></a><span class="co">#&gt; Log Odds Ratio: 0.1321 (SE: 0.1375)</span></span>
+<span id="cb3-12"><a href="#cb3-12" tabindex="-1"></a><span class="co">#&gt; 95% CI: [-0.1373, 0.4015]</span></span>
+<span id="cb3-13"><a href="#cb3-13" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb3-14"><a href="#cb3-14" tabindex="-1"></a><span class="co">#&gt; Outcome model coefficients:</span></span>
+<span id="cb3-15"><a href="#cb3-15" tabindex="-1"></a><span class="co">#&gt; (Intercept)   age_group         sex </span></span>
+<span id="cb3-16"><a href="#cb3-16" tabindex="-1"></a><span class="co">#&gt;     -0.6545      0.8477     -0.1063</span></span></code></pre></div>
+<p>STC fits a logistic regression on IPD and predicts counterfactual
+outcomes for the comparator population via G-computation. The delta
+method provides frequentist standard errors. STC is fast (sub-second)
+and a good default when covariate adjustment is needed but a full
+Bayesian model is not warranted.</p>
+</div>
+<div id="ml-umr-spfa" class="section level3">
+<h3>ML-UMR SPFA</h3>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a>fit_spfa <span class="ot">&lt;-</span> <span class="fu">mlumr</span>(</span>
+<span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a>  dat, <span class="at">model =</span> <span class="st">&quot;spfa&quot;</span>,</span>
+<span id="cb4-3"><a href="#cb4-3" tabindex="-1"></a>  <span class="at">prior_intercept =</span> <span class="fu">prior_normal</span>(<span class="dv">0</span>, <span class="dv">10</span>),</span>
+<span id="cb4-4"><a href="#cb4-4" tabindex="-1"></a>  <span class="at">prior_beta =</span> <span class="fu">prior_normal</span>(<span class="dv">0</span>, <span class="fl">2.5</span>),</span>
+<span id="cb4-5"><a href="#cb4-5" tabindex="-1"></a>  <span class="at">chains =</span> <span class="dv">2</span>, <span class="at">iter =</span> <span class="dv">500</span>, <span class="at">warmup =</span> <span class="dv">250</span>,</span>
+<span id="cb4-6"><a href="#cb4-6" tabindex="-1"></a>  <span class="at">seed =</span> <span class="dv">42</span>, <span class="at">refresh =</span> <span class="dv">0</span>, <span class="at">verbose =</span> <span class="cn">FALSE</span></span>
+<span id="cb4-7"><a href="#cb4-7" tabindex="-1"></a>)</span>
+<span id="cb4-8"><a href="#cb4-8" tabindex="-1"></a><span class="fu">summary</span>(fit_spfa)</span>
+<span id="cb4-9"><a href="#cb4-9" tabindex="-1"></a><span class="co">#&gt; ML-UMR Model Summary</span></span>
+<span id="cb4-10"><a href="#cb4-10" tabindex="-1"></a><span class="co">#&gt; ====================</span></span>
+<span id="cb4-11"><a href="#cb4-11" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb4-12"><a href="#cb4-12" tabindex="-1"></a><span class="co">#&gt; Model: SPFA </span></span>
+<span id="cb4-13"><a href="#cb4-13" tabindex="-1"></a><span class="co">#&gt; Family: Binary </span></span>
+<span id="cb4-14"><a href="#cb4-14" tabindex="-1"></a><span class="co">#&gt; Link: logit </span></span>
+<span id="cb4-15"><a href="#cb4-15" tabindex="-1"></a><span class="co">#&gt; Engine: rstan </span></span>
+<span id="cb4-16"><a href="#cb4-16" tabindex="-1"></a><span class="co">#&gt; Treatments: Drug_A (IPD) vs Drug_B (AgD)</span></span>
+<span id="cb4-17"><a href="#cb4-17" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb4-18"><a href="#cb4-18" tabindex="-1"></a><span class="co">#&gt; MCMC Diagnostics:</span></span>
+<span id="cb4-19"><a href="#cb4-19" tabindex="-1"></a><span class="co">#&gt;   Divergent transitions: 0 </span></span>
+<span id="cb4-20"><a href="#cb4-20" tabindex="-1"></a><span class="co">#&gt;   Max treedepth hits: 0 </span></span>
+<span id="cb4-21"><a href="#cb4-21" tabindex="-1"></a><span class="co">#&gt;   Max Rhat: 1.008 </span></span>
+<span id="cb4-22"><a href="#cb4-22" tabindex="-1"></a><span class="co">#&gt;   Min ESS: 123 </span></span>
+<span id="cb4-23"><a href="#cb4-23" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb4-24"><a href="#cb4-24" tabindex="-1"></a><span class="co">#&gt; Intercepts (logit scale):</span></span>
+<span id="cb4-25"><a href="#cb4-25" tabindex="-1"></a><span class="co">#&gt;       variable       mean        sd       2.5%      97.5%      Rhat</span></span>
+<span id="cb4-26"><a href="#cb4-26" tabindex="-1"></a><span class="co">#&gt;       mu_index -0.6504984 0.1562830 -0.9497378 -0.3353501 0.9990681</span></span>
+<span id="cb4-27"><a href="#cb4-27" tabindex="-1"></a><span class="co">#&gt;  mu_comparator -0.8007299 0.1538053 -1.1324019 -0.4791986 1.0054141</span></span>
+<span id="cb4-28"><a href="#cb4-28" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb4-29"><a href="#cb4-29" tabindex="-1"></a><span class="co">#&gt; Regression Coefficients:</span></span>
+<span id="cb4-30"><a href="#cb4-30" tabindex="-1"></a><span class="co">#&gt;  variable       mean        sd       2.5%     97.5%     Rhat</span></span>
+<span id="cb4-31"><a href="#cb4-31" tabindex="-1"></a><span class="co">#&gt;   beta[1]  0.8437293 0.2053132  0.4392676 1.2323737 1.006647</span></span>
+<span id="cb4-32"><a href="#cb4-32" tabindex="-1"></a><span class="co">#&gt;   beta[2] -0.1129692 0.1849058 -0.4669804 0.2337334 1.003014</span></span>
+<span id="cb4-33"><a href="#cb4-33" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb4-34"><a href="#cb4-34" tabindex="-1"></a><span class="co">#&gt; Marginal Treatment Effects:</span></span>
+<span id="cb4-35"><a href="#cb4-35" tabindex="-1"></a><span class="co">#&gt;   Log Odds Ratios:</span></span>
+<span id="cb4-36"><a href="#cb4-36" tabindex="-1"></a><span class="co">#&gt;        variable      mean        sd       2.5%     97.5%</span></span>
+<span id="cb4-37"><a href="#cb4-37" tabindex="-1"></a><span class="co">#&gt;       lor_index 0.1437993 0.1368440 -0.1022970 0.4121727</span></span>
+<span id="cb4-38"><a href="#cb4-38" tabindex="-1"></a><span class="co">#&gt;  lor_comparator 0.1441575 0.1371719 -0.1024831 0.4129336</span></span>
+<span id="cb4-39"><a href="#cb4-39" tabindex="-1"></a><span class="co">#&gt;   Risk Differences:</span></span>
+<span id="cb4-40"><a href="#cb4-40" tabindex="-1"></a><span class="co">#&gt;       variable       mean         sd        2.5%      97.5%</span></span>
+<span id="cb4-41"><a href="#cb4-41" tabindex="-1"></a><span class="co">#&gt;       rd_index 0.03411178 0.03236864 -0.02436672 0.09788732</span></span>
+<span id="cb4-42"><a href="#cb4-42" tabindex="-1"></a><span class="co">#&gt;  rd_comparator 0.03393758 0.03220645 -0.02410684 0.09729075</span></span>
+<span id="cb4-43"><a href="#cb4-43" tabindex="-1"></a><span class="co">#&gt;   Risk Ratios:</span></span>
+<span id="cb4-44"><a href="#cb4-44" tabindex="-1"></a><span class="co">#&gt;       variable     mean         sd      2.5%    97.5%</span></span>
+<span id="cb4-45"><a href="#cb4-45" tabindex="-1"></a><span class="co">#&gt;       rr_index 1.095557 0.09293487 0.9396591 1.294386</span></span>
+<span id="cb4-46"><a href="#cb4-46" tabindex="-1"></a><span class="co">#&gt;  rr_comparator 1.097164 0.09443462 0.9383092 1.297817</span></span></code></pre></div>
+<p>The SPFA model assumes shared covariate effects across treatments. It
+jointly models both data sources and produces posterior distributions
+for all parameters.</p>
+</div>
+<div id="ml-umr-relaxed" class="section level3">
+<h3>ML-UMR Relaxed</h3>
+<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a>fit_relaxed <span class="ot">&lt;-</span> <span class="fu">mlumr</span>(</span>
+<span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a>  dat, <span class="at">model =</span> <span class="st">&quot;relaxed&quot;</span>,</span>
+<span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a>  <span class="at">prior_intercept =</span> <span class="fu">prior_normal</span>(<span class="dv">0</span>, <span class="dv">10</span>),</span>
+<span id="cb5-4"><a href="#cb5-4" tabindex="-1"></a>  <span class="at">prior_beta =</span> <span class="fu">prior_normal</span>(<span class="dv">0</span>, <span class="fl">2.5</span>),</span>
+<span id="cb5-5"><a href="#cb5-5" tabindex="-1"></a>  <span class="at">chains =</span> <span class="dv">2</span>, <span class="at">iter =</span> <span class="dv">500</span>, <span class="at">warmup =</span> <span class="dv">250</span>,</span>
+<span id="cb5-6"><a href="#cb5-6" tabindex="-1"></a>  <span class="at">seed =</span> <span class="dv">43</span>, <span class="at">refresh =</span> <span class="dv">0</span>, <span class="at">verbose =</span> <span class="cn">FALSE</span></span>
+<span id="cb5-7"><a href="#cb5-7" tabindex="-1"></a>)</span>
+<span id="cb5-8"><a href="#cb5-8" tabindex="-1"></a><span class="fu">summary</span>(fit_relaxed)</span>
+<span id="cb5-9"><a href="#cb5-9" tabindex="-1"></a><span class="co">#&gt; ML-UMR Model Summary</span></span>
+<span id="cb5-10"><a href="#cb5-10" tabindex="-1"></a><span class="co">#&gt; ====================</span></span>
+<span id="cb5-11"><a href="#cb5-11" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb5-12"><a href="#cb5-12" tabindex="-1"></a><span class="co">#&gt; Model: Relaxed SPFA </span></span>
+<span id="cb5-13"><a href="#cb5-13" tabindex="-1"></a><span class="co">#&gt; Family: Binary </span></span>
+<span id="cb5-14"><a href="#cb5-14" tabindex="-1"></a><span class="co">#&gt; Link: logit </span></span>
+<span id="cb5-15"><a href="#cb5-15" tabindex="-1"></a><span class="co">#&gt; Engine: rstan </span></span>
+<span id="cb5-16"><a href="#cb5-16" tabindex="-1"></a><span class="co">#&gt; Treatments: Drug_A (IPD) vs Drug_B (AgD)</span></span>
+<span id="cb5-17"><a href="#cb5-17" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb5-18"><a href="#cb5-18" tabindex="-1"></a><span class="co">#&gt; MCMC Diagnostics:</span></span>
+<span id="cb5-19"><a href="#cb5-19" tabindex="-1"></a><span class="co">#&gt;   Divergent transitions: 0 </span></span>
+<span id="cb5-20"><a href="#cb5-20" tabindex="-1"></a><span class="co">#&gt;   Max treedepth hits: 0 </span></span>
+<span id="cb5-21"><a href="#cb5-21" tabindex="-1"></a><span class="co">#&gt;   Max Rhat: 1.009 </span></span>
+<span id="cb5-22"><a href="#cb5-22" tabindex="-1"></a><span class="co">#&gt;   Min ESS: 151 </span></span>
+<span id="cb5-23"><a href="#cb5-23" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb5-24"><a href="#cb5-24" tabindex="-1"></a><span class="co">#&gt; Intercepts (logit scale):</span></span>
+<span id="cb5-25"><a href="#cb5-25" tabindex="-1"></a><span class="co">#&gt;       variable       mean        sd       2.5%      97.5%     Rhat</span></span>
+<span id="cb5-26"><a href="#cb5-26" tabindex="-1"></a><span class="co">#&gt;       mu_index -0.6506521 0.1552833 -0.9733024 -0.3444626 1.003992</span></span>
+<span id="cb5-27"><a href="#cb5-27" tabindex="-1"></a><span class="co">#&gt;  mu_comparator -0.9916549 1.6189626 -4.4117344  1.7617439 1.002768</span></span>
+<span id="cb5-28"><a href="#cb5-28" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb5-29"><a href="#cb5-29" tabindex="-1"></a><span class="co">#&gt; Regression Coefficients:</span></span>
+<span id="cb5-30"><a href="#cb5-30" tabindex="-1"></a><span class="co">#&gt;            variable       mean        sd       2.5%     97.5%      Rhat</span></span>
+<span id="cb5-31"><a href="#cb5-31" tabindex="-1"></a><span class="co">#&gt;       beta_index[1]  0.8445558 0.1998645  0.4549557 1.2394099 0.9994025</span></span>
+<span id="cb5-32"><a href="#cb5-32" tabindex="-1"></a><span class="co">#&gt;       beta_index[2] -0.1140334 0.1987585 -0.4830300 0.2641751 0.9993862</span></span>
+<span id="cb5-33"><a href="#cb5-33" tabindex="-1"></a><span class="co">#&gt;  beta_comparator[1]  0.1762647 2.8346721 -5.2196499 5.4027178 1.0008780</span></span>
+<span id="cb5-34"><a href="#cb5-34" tabindex="-1"></a><span class="co">#&gt;  beta_comparator[2]  0.1190578 2.6669410 -4.4449794 5.2766561 1.0039737</span></span>
+<span id="cb5-35"><a href="#cb5-35" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb5-36"><a href="#cb5-36" tabindex="-1"></a><span class="co">#&gt; Marginal Treatment Effects:</span></span>
+<span id="cb5-37"><a href="#cb5-37" tabindex="-1"></a><span class="co">#&gt;   Log Odds Ratios:</span></span>
+<span id="cb5-38"><a href="#cb5-38" tabindex="-1"></a><span class="co">#&gt;        variable      mean        sd       2.5%     97.5%</span></span>
+<span id="cb5-39"><a href="#cb5-39" tabindex="-1"></a><span class="co">#&gt;       lor_index 0.1432492 0.1953916 -0.2070638 0.5380411</span></span>
+<span id="cb5-40"><a href="#cb5-40" tabindex="-1"></a><span class="co">#&gt;  lor_comparator 0.1244781 0.1363172 -0.1377880 0.3891701</span></span>
+<span id="cb5-41"><a href="#cb5-41" tabindex="-1"></a><span class="co">#&gt;   Risk Differences:</span></span>
+<span id="cb5-42"><a href="#cb5-42" tabindex="-1"></a><span class="co">#&gt;       variable       mean         sd        2.5%      97.5%</span></span>
+<span id="cb5-43"><a href="#cb5-43" tabindex="-1"></a><span class="co">#&gt;       rd_index 0.03339867 0.04570687 -0.05061295 0.12466173</span></span>
+<span id="cb5-44"><a href="#cb5-44" tabindex="-1"></a><span class="co">#&gt;  rd_comparator 0.02939591 0.03218000 -0.03257277 0.09120433</span></span>
+<span id="cb5-45"><a href="#cb5-45" tabindex="-1"></a><span class="co">#&gt;   Risk Ratios:</span></span>
+<span id="cb5-46"><a href="#cb5-46" tabindex="-1"></a><span class="co">#&gt;       variable     mean         sd      2.5%    97.5%</span></span>
+<span id="cb5-47"><a href="#cb5-47" tabindex="-1"></a><span class="co">#&gt;       rr_index 1.102062 0.13685994 0.8868852 1.411378</span></span>
+<span id="cb5-48"><a href="#cb5-48" tabindex="-1"></a><span class="co">#&gt;  rr_comparator 1.083395 0.09086321 0.9182389 1.272522</span></span></code></pre></div>
+<p>The Relaxed model allows treatment-specific covariate coefficients,
+capturing potential effect modification. Compare it with SPFA to assess
+whether assuming shared effects is reasonable. With sparse AgD,
+relaxed-model comparator coefficients can be prior-sensitive, so inspect
+<code>delta_beta</code> and run prior-sensitivity checks when the
+relaxed model is central to the interpretation.</p>
+</div>
+</div>
+<div id="building-a-comparison-table" class="section level2">
+<h2>Building a comparison table</h2>
+<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a><span class="co"># Extract ML-UMR marginal effects (LOR in comparator population)</span></span>
+<span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a>me_spfa <span class="ot">&lt;-</span> <span class="fu">marginal_effects</span>(fit_spfa, <span class="at">effect =</span> <span class="st">&quot;lor&quot;</span>)</span>
+<span id="cb6-3"><a href="#cb6-3" tabindex="-1"></a>me_relaxed <span class="ot">&lt;-</span> <span class="fu">marginal_effects</span>(fit_relaxed, <span class="at">effect =</span> <span class="st">&quot;lor&quot;</span>)</span>
+<span id="cb6-4"><a href="#cb6-4" tabindex="-1"></a></span>
+<span id="cb6-5"><a href="#cb6-5" tabindex="-1"></a><span class="co"># Comparator-population LORs from ML-UMR</span></span>
+<span id="cb6-6"><a href="#cb6-6" tabindex="-1"></a>lor_spfa <span class="ot">&lt;-</span> me_spfa[me_spfa<span class="sc">$</span>population <span class="sc">==</span> <span class="st">&quot;Comparator&quot;</span>, ]</span>
+<span id="cb6-7"><a href="#cb6-7" tabindex="-1"></a>lor_relaxed <span class="ot">&lt;-</span> me_relaxed[me_relaxed<span class="sc">$</span>population <span class="sc">==</span> <span class="st">&quot;Comparator&quot;</span>, ]</span>
+<span id="cb6-8"><a href="#cb6-8" tabindex="-1"></a></span>
+<span id="cb6-9"><a href="#cb6-9" tabindex="-1"></a><span class="co"># Assemble results</span></span>
+<span id="cb6-10"><a href="#cb6-10" tabindex="-1"></a>comparison <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
+<span id="cb6-11"><a href="#cb6-11" tabindex="-1"></a>  <span class="at">Method =</span> <span class="fu">c</span>(<span class="st">&quot;Naive&quot;</span>, <span class="st">&quot;STC&quot;</span>, <span class="st">&quot;ML-UMR SPFA&quot;</span>, <span class="st">&quot;ML-UMR Relaxed&quot;</span>),</span>
+<span id="cb6-12"><a href="#cb6-12" tabindex="-1"></a>  <span class="at">LOR =</span> <span class="fu">c</span>(res_naive<span class="sc">$</span>link_effect, res_stc<span class="sc">$</span>link_effect, lor_spfa<span class="sc">$</span>mean, lor_relaxed<span class="sc">$</span>mean),</span>
+<span id="cb6-13"><a href="#cb6-13" tabindex="-1"></a>  <span class="at">SE =</span> <span class="fu">c</span>(res_naive<span class="sc">$</span>se, res_stc<span class="sc">$</span>se, lor_spfa<span class="sc">$</span>sd, lor_relaxed<span class="sc">$</span>sd),</span>
+<span id="cb6-14"><a href="#cb6-14" tabindex="-1"></a>  <span class="at">CI_lower =</span> <span class="fu">c</span>(res_naive<span class="sc">$</span>ci_lower, res_stc<span class="sc">$</span>ci_lower,</span>
+<span id="cb6-15"><a href="#cb6-15" tabindex="-1"></a>               lor_spfa<span class="sc">$</span>q2<span class="fl">.5</span>, lor_relaxed<span class="sc">$</span>q2<span class="fl">.5</span>),</span>
+<span id="cb6-16"><a href="#cb6-16" tabindex="-1"></a>  <span class="at">CI_upper =</span> <span class="fu">c</span>(res_naive<span class="sc">$</span>ci_upper, res_stc<span class="sc">$</span>ci_upper,</span>
+<span id="cb6-17"><a href="#cb6-17" tabindex="-1"></a>               lor_spfa<span class="sc">$</span>q97<span class="fl">.5</span>, lor_relaxed<span class="sc">$</span>q97<span class="fl">.5</span>),</span>
+<span id="cb6-18"><a href="#cb6-18" tabindex="-1"></a>  <span class="at">stringsAsFactors =</span> <span class="cn">FALSE</span></span>
+<span id="cb6-19"><a href="#cb6-19" tabindex="-1"></a>)</span>
+<span id="cb6-20"><a href="#cb6-20" tabindex="-1"></a></span>
+<span id="cb6-21"><a href="#cb6-21" tabindex="-1"></a><span class="co"># Add odds ratios for clinical interpretation</span></span>
+<span id="cb6-22"><a href="#cb6-22" tabindex="-1"></a>comparison<span class="sc">$</span>OR <span class="ot">&lt;-</span> <span class="fu">exp</span>(comparison<span class="sc">$</span>LOR)</span>
+<span id="cb6-23"><a href="#cb6-23" tabindex="-1"></a>comparison<span class="sc">$</span>OR_lower <span class="ot">&lt;-</span> <span class="fu">exp</span>(comparison<span class="sc">$</span>CI_lower)</span>
+<span id="cb6-24"><a href="#cb6-24" tabindex="-1"></a>comparison<span class="sc">$</span>OR_upper <span class="ot">&lt;-</span> <span class="fu">exp</span>(comparison<span class="sc">$</span>CI_upper)</span>
+<span id="cb6-25"><a href="#cb6-25" tabindex="-1"></a></span>
+<span id="cb6-26"><a href="#cb6-26" tabindex="-1"></a><span class="fu">print</span>(comparison, <span class="at">digits =</span> <span class="dv">3</span>)</span>
+<span id="cb6-27"><a href="#cb6-27" tabindex="-1"></a><span class="co">#&gt;           Method   LOR    SE CI_lower CI_upper   OR OR_lower OR_upper</span></span>
+<span id="cb6-28"><a href="#cb6-28" tabindex="-1"></a><span class="co">#&gt; 1          Naive 0.168 0.138   -0.102    0.438 1.18    0.903     1.55</span></span>
+<span id="cb6-29"><a href="#cb6-29" tabindex="-1"></a><span class="co">#&gt; 2            STC 0.132 0.137   -0.137    0.402 1.14    0.872     1.49</span></span>
+<span id="cb6-30"><a href="#cb6-30" tabindex="-1"></a><span class="co">#&gt; 3    ML-UMR SPFA 0.144 0.137   -0.102    0.413 1.16    0.903     1.51</span></span>
+<span id="cb6-31"><a href="#cb6-31" tabindex="-1"></a><span class="co">#&gt; 4 ML-UMR Relaxed 0.124 0.136   -0.138    0.389 1.13    0.871     1.48</span></span></code></pre></div>
+</div>
+<div id="interpreting-differences-between-methods" class="section level2">
+<h2>Interpreting differences between methods</h2>
+<div id="naive-vs-stc" class="section level3">
+<h3>Naive vs STC</h3>
+<p>A large gap between naive and STC estimates indicates that covariate
+imbalance is influencing the unadjusted comparison. The direction of the
+shift reveals which population’s covariates favor the outcome.</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a>bias_naive <span class="ot">&lt;-</span> res_naive<span class="sc">$</span>link_effect <span class="sc">-</span> res_stc<span class="sc">$</span>link_effect</span>
+<span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a><span class="fu">cat</span>(<span class="fu">sprintf</span>(<span class="st">&quot;Apparent bias from covariate imbalance: %.3f (log OR scale)</span><span class="sc">\n</span><span class="st">&quot;</span>,</span>
+<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a>            bias_naive))</span>
+<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a><span class="co">#&gt; Apparent bias from covariate imbalance: 0.036 (log OR scale)</span></span></code></pre></div>
+</div>
+<div id="stc-vs-ml-umr-spfa" class="section level3">
+<h3>STC vs ML-UMR SPFA</h3>
+<p>Under the shared prognostic factor assumption, STC and ML-UMR SPFA
+should give similar point estimates because both adjust for the same
+covariates. Differences arise because:</p>
+<ol style="list-style-type: decimal">
+<li><strong>STC</strong> uses maximum likelihood;
+<strong>ML-UMR</strong> uses Bayesian inference with priors. With large
+samples, this difference is small.</li>
+<li><strong>ML-UMR</strong> jointly models both data sources;
+<strong>STC</strong> only uses AgD for prediction targets, not as a
+likelihood contribution.</li>
+<li>ML-UMR uncertainty intervals tend to be wider because they account
+for more sources of uncertainty (prior, integration, joint
+modeling).</li>
+</ol>
+</div>
+<div id="spfa-vs-relaxed" class="section level3">
+<h3>SPFA vs Relaxed</h3>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a>dic_comparison <span class="ot">&lt;-</span> <span class="fu">compare_models</span>(fit_spfa, fit_relaxed)</span>
+<span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb8-3"><a href="#cb8-3" tabindex="-1"></a><span class="co">#&gt; Model Comparison (DIC)</span></span>
+<span id="cb8-4"><a href="#cb8-4" tabindex="-1"></a><span class="co">#&gt; ======================</span></span>
+<span id="cb8-5"><a href="#cb8-5" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb8-6"><a href="#cb8-6" tabindex="-1"></a><span class="co">#&gt;         Model    DIC   pD Delta_DIC</span></span>
+<span id="cb8-7"><a href="#cb8-7" tabindex="-1"></a><span class="co">#&gt;  Relaxed SPFA 670.58 3.89      0.00</span></span>
+<span id="cb8-8"><a href="#cb8-8" tabindex="-1"></a><span class="co">#&gt;          SPFA 670.74 4.02      0.17</span></span>
+<span id="cb8-9"><a href="#cb8-9" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb8-10"><a href="#cb8-10" tabindex="-1"></a><span class="co">#&gt; Lower DIC = better fit. Delta_DIC &gt; 5 is a rough heuristic for</span></span>
+<span id="cb8-11"><a href="#cb8-11" tabindex="-1"></a><span class="co">#&gt; meaningful difference, not a formally calibrated threshold.</span></span>
+<span id="cb8-12"><a href="#cb8-12" tabindex="-1"></a><span class="co">#&gt; DIC should not be the sole basis for model selection.</span></span>
+<span id="cb8-13"><a href="#cb8-13" tabindex="-1"></a><span class="fu">print</span>(dic_comparison)</span>
+<span id="cb8-14"><a href="#cb8-14" tabindex="-1"></a><span class="co">#&gt;          Model    DIC   pD Delta_DIC</span></span>
+<span id="cb8-15"><a href="#cb8-15" tabindex="-1"></a><span class="co">#&gt; 1 Relaxed SPFA 670.58 3.89      0.00</span></span>
+<span id="cb8-16"><a href="#cb8-16" tabindex="-1"></a><span class="co">#&gt; 2         SPFA 670.74 4.02      0.17</span></span></code></pre></div>
+<p>If the Relaxed model gives markedly different LORs or substantially
+better DIC, this <em>may</em> suggest effect modification – covariate
+effects differ by treatment. However, DIC is a rough metric with known
+limitations: it should not be the sole basis for claiming effect
+modification. Always inspect <code>delta_beta</code> credible intervals,
+prior sensitivity, and clinical plausibility. If SPFA and Relaxed agree,
+the simpler SPFA model is preferred.</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a><span class="co"># Directly compare delta_beta from the Relaxed model</span></span>
+<span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a><span class="co"># Non-zero delta_beta indicates effect modification</span></span>
+<span id="cb9-3"><a href="#cb9-3" tabindex="-1"></a>relaxed_summary <span class="ot">&lt;-</span> fit_relaxed<span class="sc">$</span>summary</span>
+<span id="cb9-4"><a href="#cb9-4" tabindex="-1"></a>delta_rows <span class="ot">&lt;-</span> <span class="fu">grepl</span>(<span class="st">&quot;^delta_beta&quot;</span>, relaxed_summary<span class="sc">$</span>variable)</span>
+<span id="cb9-5"><a href="#cb9-5" tabindex="-1"></a><span class="cf">if</span> (<span class="fu">any</span>(delta_rows)) {</span>
+<span id="cb9-6"><a href="#cb9-6" tabindex="-1"></a>  <span class="fu">cat</span>(<span class="st">&quot;Effect modification parameters (delta_beta):</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb9-7"><a href="#cb9-7" tabindex="-1"></a>  <span class="fu">print</span>(relaxed_summary[delta_rows, <span class="fu">c</span>(<span class="st">&quot;variable&quot;</span>, <span class="st">&quot;mean&quot;</span>, <span class="st">&quot;2.5%&quot;</span>, <span class="st">&quot;97.5%&quot;</span>)],</span>
+<span id="cb9-8"><a href="#cb9-8" tabindex="-1"></a>        <span class="at">row.names =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb9-9"><a href="#cb9-9" tabindex="-1"></a>}</span>
+<span id="cb9-10"><a href="#cb9-10" tabindex="-1"></a><span class="co">#&gt; Effect modification parameters (delta_beta):</span></span>
+<span id="cb9-11"><a href="#cb9-11" tabindex="-1"></a><span class="co">#&gt;       variable       mean      2.5%    97.5%</span></span>
+<span id="cb9-12"><a href="#cb9-12" tabindex="-1"></a><span class="co">#&gt;  delta_beta[1]  0.6682911 -4.721495 6.144315</span></span>
+<span id="cb9-13"><a href="#cb9-13" tabindex="-1"></a><span class="co">#&gt;  delta_beta[2] -0.2330913 -5.506909 4.368791</span></span></code></pre></div>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a><span class="fu">prior_sensitivity</span>(fit_relaxed, <span class="at">prior_beta_scales =</span> <span class="fu">c</span>(<span class="dv">1</span>, <span class="fl">2.5</span>, <span class="dv">5</span>, <span class="dv">10</span>))</span></code></pre></div>
+</div>
+</div>
+<div id="decision-guide-which-method-to-report" class="section level2">
+<h2>Decision guide: which method to report?</h2>
+<p>The choice of primary analysis depends on the clinical and regulatory
+context. This flowchart summarizes the main considerations:</p>
+<ol style="list-style-type: decimal">
+<li><strong>Are covariate distributions similar across trials?</strong>
+<ul>
+<li>Yes: Naive estimate may suffice as primary, with STC as
+sensitivity.</li>
+<li>No: Adjustment is needed. Proceed to step 2.</li>
+</ul></li>
+<li><strong>Is the SPFA assumption plausible?</strong>
+<ul>
+<li>Yes: ML-UMR SPFA is the recommended primary analysis. Report STC and
+Naive as sensitivity analyses.</li>
+<li>Uncertain: Run both SPFA and Relaxed. If they agree, report SPFA. If
+they disagree, report Relaxed as primary and discuss the evidence for
+effect modification.</li>
+<li>No (known effect modification): ML-UMR Relaxed as primary.</li>
+</ul></li>
+<li><strong>Is Bayesian analysis acceptable to the audience?</strong>
+<ul>
+<li>No: Report STC as primary with ML-UMR as sensitivity.</li>
+<li>Yes: Report ML-UMR as primary with STC as sensitivity.</li>
+</ul></li>
+</ol>
+<p>In all cases, report the naive estimate as a benchmark to quantify
+the impact of covariate adjustment.</p>
+</div>
+<div id="presenting-results" class="section level2">
+<h2>Presenting results</h2>
+<p>For a complete ITC report, present:</p>
+<ol style="list-style-type: decimal">
+<li><strong>A summary table</strong> (as above) with LOR, SE, and CI for
+each method</li>
+<li><strong>Model diagnostics</strong> for ML-UMR (divergences, Rhat,
+ESS)</li>
+<li><strong>DIC comparison</strong> between SPFA and Relaxed (if both
+were fit)</li>
+<li><strong>A narrative</strong> explaining which method is primary and
+why, with sensitivity analyses supporting the conclusions</li>
+</ol>
+<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a><span class="co"># Example narrative output</span></span>
+<span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;Primary analysis: ML-UMR SPFA</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb11-3"><a href="#cb11-3" tabindex="-1"></a><span class="co">#&gt; Primary analysis: ML-UMR SPFA</span></span>
+<span id="cb11-4"><a href="#cb11-4" tabindex="-1"></a><span class="fu">cat</span>(<span class="fu">sprintf</span>(<span class="st">&quot;  LOR = %.3f (95%% CrI: %.3f to %.3f)</span><span class="sc">\n</span><span class="st">&quot;</span>,</span>
+<span id="cb11-5"><a href="#cb11-5" tabindex="-1"></a>            lor_spfa<span class="sc">$</span>mean, lor_spfa<span class="sc">$</span>q2<span class="fl">.5</span>, lor_spfa<span class="sc">$</span>q97<span class="fl">.5</span>))</span>
+<span id="cb11-6"><a href="#cb11-6" tabindex="-1"></a><span class="co">#&gt;   LOR = 0.144 (95% CrI: -0.102 to 0.413)</span></span>
+<span id="cb11-7"><a href="#cb11-7" tabindex="-1"></a><span class="fu">cat</span>(<span class="fu">sprintf</span>(<span class="st">&quot;  OR  = %.3f (95%% CrI: %.3f to %.3f)</span><span class="sc">\n\n</span><span class="st">&quot;</span>,</span>
+<span id="cb11-8"><a href="#cb11-8" tabindex="-1"></a>            <span class="fu">exp</span>(lor_spfa<span class="sc">$</span>mean), <span class="fu">exp</span>(lor_spfa<span class="sc">$</span>q2<span class="fl">.5</span>), <span class="fu">exp</span>(lor_spfa<span class="sc">$</span>q97<span class="fl">.5</span>)))</span>
+<span id="cb11-9"><a href="#cb11-9" tabindex="-1"></a><span class="co">#&gt;   OR  = 1.155 (95% CrI: 0.903 to 1.511)</span></span>
+<span id="cb11-10"><a href="#cb11-10" tabindex="-1"></a></span>
+<span id="cb11-11"><a href="#cb11-11" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;Sensitivity analyses:</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb11-12"><a href="#cb11-12" tabindex="-1"></a><span class="co">#&gt; Sensitivity analyses:</span></span>
+<span id="cb11-13"><a href="#cb11-13" tabindex="-1"></a><span class="fu">cat</span>(<span class="fu">sprintf</span>(<span class="st">&quot;  STC:    LOR = %.3f (95%% CI: %.3f to %.3f)</span><span class="sc">\n</span><span class="st">&quot;</span>,</span>
+<span id="cb11-14"><a href="#cb11-14" tabindex="-1"></a>            res_stc<span class="sc">$</span>link_effect, res_stc<span class="sc">$</span>ci_lower, res_stc<span class="sc">$</span>ci_upper))</span>
+<span id="cb11-15"><a href="#cb11-15" tabindex="-1"></a><span class="co">#&gt;   STC:    LOR = 0.132 (95% CI: -0.137 to 0.402)</span></span>
+<span id="cb11-16"><a href="#cb11-16" tabindex="-1"></a><span class="fu">cat</span>(<span class="fu">sprintf</span>(<span class="st">&quot;  Naive:  LOR = %.3f (95%% CI: %.3f to %.3f)</span><span class="sc">\n</span><span class="st">&quot;</span>,</span>
+<span id="cb11-17"><a href="#cb11-17" tabindex="-1"></a>            res_naive<span class="sc">$</span>link_effect, res_naive<span class="sc">$</span>ci_lower, res_naive<span class="sc">$</span>ci_upper))</span>
+<span id="cb11-18"><a href="#cb11-18" tabindex="-1"></a><span class="co">#&gt;   Naive:  LOR = 0.168 (95% CI: -0.102 to 0.438)</span></span>
+<span id="cb11-19"><a href="#cb11-19" tabindex="-1"></a><span class="fu">cat</span>(<span class="fu">sprintf</span>(<span class="st">&quot;  Relaxed: LOR = %.3f (95%% CrI: %.3f to %.3f)</span><span class="sc">\n</span><span class="st">&quot;</span>,</span>
+<span id="cb11-20"><a href="#cb11-20" tabindex="-1"></a>            lor_relaxed<span class="sc">$</span>mean, lor_relaxed<span class="sc">$</span>q2<span class="fl">.5</span>, lor_relaxed<span class="sc">$</span>q97<span class="fl">.5</span>))</span>
+<span id="cb11-21"><a href="#cb11-21" tabindex="-1"></a><span class="co">#&gt;   Relaxed: LOR = 0.124 (95% CrI: -0.138 to 0.389)</span></span></code></pre></div>
+</div>
+<div id="summary" class="section level2">
+<h2>Summary</h2>
+<p>Running all three methods and comparing their results strengthens any
+unanchored ITC analysis. mlumr’s unified data interface makes this
+comparison straightforward – the same <code>mlumr_data</code> object
+feeds all methods, ensuring consistency in the inputs.</p>
+<p>Key takeaways:</p>
+<ul>
+<li><strong>Always report the naive estimate</strong> as a baseline to
+show the impact of adjustment.</li>
+<li><strong>STC is a fast, frequentist alternative</strong> that adjusts
+for measured covariates via outcome regression.</li>
+<li><strong>ML-UMR SPFA</strong> is the recommended primary analysis
+under the shared prognostic factor assumption, offering fully Bayesian
+uncertainty quantification.</li>
+<li><strong>ML-UMR Relaxed</strong> is a useful sensitivity analysis
+when effect modification is plausible.</li>
+<li><strong>Compare SPFA and Relaxed via DIC</strong> as a rough
+sensitivity check. DIC is a legacy metric with known limitations; treat
+large differences as suggestive rather than definitive evidence for
+effect modification.</li>
+</ul>
+</div>
+
+
+
+<!-- code folding -->
+
+
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+  (function () {
+    var script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src  = "https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML";
+    document.getElementsByTagName("head")[0].appendChild(script);
+  })();
+</script>
+
+</body>
+</html>
