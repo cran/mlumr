@@ -12,7 +12,7 @@
 
 
 
-<title>Data Preparation and Integration</title>
+<title>Preparing data and integration points</title>
 
 <script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
 // be compatible with the behavior of Pandoc < 2.8).
@@ -337,863 +337,336 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 
 
 
-<h1 class="title toc-ignore">Data Preparation and Integration</h1>
+<h1 class="title toc-ignore">Preparing data and integration points</h1>
 
 
 
-<div id="overview" class="section level2">
-<h2>Overview</h2>
-<p>Before fitting any model in mlumr, you need to:</p>
+<p>Every mlumr analysis follows the same four-step pipeline. This
+vignette covers the <strong>family-agnostic</strong> machinery,
+combining IPD and AgD and, above all, the numerical integration that
+powers population adjustment. The exact <code>set_ipd()</code> /
+<code>set_agd()</code> arguments for each outcome family are shown, with
+complete runnable examples, in the per-outcome vignettes (see the
+reference table below).</p>
 <ol style="list-style-type: decimal">
-<li>Set up the IPD with <code>set_ipd()</code></li>
-<li>Set up the AgD with <code>set_agd()</code></li>
-<li>Combine them with <code>combine_data()</code></li>
-<li>(For ML-UMR only) Add integration points with
-<code>add_integration()</code></li>
+<li><code>set_ipd()</code>, individual patient data (the index
+treatment)</li>
+<li><code>set_agd()</code> (or <code>set_agd_surv()</code> for
+survival), aggregate data (comparator)</li>
+<li><code>combine_data()</code>, join them into one
+<code>mlumr_data</code> object</li>
+<li><code>add_integration()</code>, quasi-Monte Carlo integration points
+(ML-UMR only)</li>
 </ol>
-</div>
-<div id="setting-up-ipd" class="section level2">
-<h2>Setting up IPD</h2>
-<p>IPD should be a data frame with one row per patient, containing:</p>
-<ul>
-<li>A treatment indicator column</li>
-<li>An outcome column (binary 0/1, continuous numeric, or non-negative
-integer counts depending on <code>family</code>)</li>
-<li>Covariate columns</li>
-<li>For Poisson family: an exposure column</li>
-</ul>
+<div id="the-pipeline-illustrated-on-a-binary-endpoint" class="section level2">
+<h2>The pipeline (illustrated on a binary endpoint)</h2>
+<p>The four steps below build a complete <code>mlumr_data</code> object
+from a binary IPD trial and a one-row aggregate comparator; the sections
+that follow explain each piece (covariate naming, integration,
+correlation) in detail:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">library</span>(mlumr)</span>
 <span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">2026</span>)</span>
 <span id="cb1-3"><a href="#cb1-3" tabindex="-1"></a></span>
-<span id="cb1-4"><a href="#cb1-4" tabindex="-1"></a><span class="co"># Example: Trial A data (index treatment)</span></span>
+<span id="cb1-4"><a href="#cb1-4" tabindex="-1"></a><span class="co"># IPD (index): one row per patient</span></span>
 <span id="cb1-5"><a href="#cb1-5" tabindex="-1"></a>trial_a <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
-<span id="cb1-6"><a href="#cb1-6" tabindex="-1"></a>  <span class="at">patient_id =</span> <span class="dv">1</span><span class="sc">:</span><span class="dv">500</span>,</span>
-<span id="cb1-7"><a href="#cb1-7" tabindex="-1"></a>  <span class="at">treatment =</span> <span class="st">&quot;Drug_A&quot;</span>,</span>
-<span id="cb1-8"><a href="#cb1-8" tabindex="-1"></a>  <span class="at">response =</span> <span class="fu">rbinom</span>(<span class="dv">500</span>, <span class="dv">1</span>, <span class="fl">0.6</span>),</span>
-<span id="cb1-9"><a href="#cb1-9" tabindex="-1"></a>  <span class="at">age_group =</span> <span class="fu">rbinom</span>(<span class="dv">500</span>, <span class="dv">1</span>, <span class="fl">0.4</span>),   <span class="co"># 0 = young, 1 = old</span></span>
-<span id="cb1-10"><a href="#cb1-10" tabindex="-1"></a>  <span class="at">sex =</span> <span class="fu">rbinom</span>(<span class="dv">500</span>, <span class="dv">1</span>, <span class="fl">0.55</span>)          <span class="co"># 0 = male, 1 = female</span></span>
-<span id="cb1-11"><a href="#cb1-11" tabindex="-1"></a>)</span>
-<span id="cb1-12"><a href="#cb1-12" tabindex="-1"></a></span>
-<span id="cb1-13"><a href="#cb1-13" tabindex="-1"></a>ipd <span class="ot">&lt;-</span> <span class="fu">set_ipd</span>(</span>
-<span id="cb1-14"><a href="#cb1-14" tabindex="-1"></a>  <span class="at">data =</span> trial_a,</span>
-<span id="cb1-15"><a href="#cb1-15" tabindex="-1"></a>  <span class="at">treatment =</span> <span class="st">&quot;treatment&quot;</span>,</span>
-<span id="cb1-16"><a href="#cb1-16" tabindex="-1"></a>  <span class="at">outcome =</span> <span class="st">&quot;response&quot;</span>,</span>
-<span id="cb1-17"><a href="#cb1-17" tabindex="-1"></a>  <span class="at">covariates =</span> <span class="fu">c</span>(<span class="st">&quot;age_group&quot;</span>, <span class="st">&quot;sex&quot;</span>)</span>
+<span id="cb1-6"><a href="#cb1-6" tabindex="-1"></a>  <span class="at">treatment =</span> <span class="st">&quot;Drug_A&quot;</span>,</span>
+<span id="cb1-7"><a href="#cb1-7" tabindex="-1"></a>  <span class="at">response =</span> <span class="fu">rbinom</span>(<span class="dv">500</span>, <span class="dv">1</span>, <span class="fl">0.6</span>),</span>
+<span id="cb1-8"><a href="#cb1-8" tabindex="-1"></a>  <span class="at">age_group =</span> <span class="fu">rbinom</span>(<span class="dv">500</span>, <span class="dv">1</span>, <span class="fl">0.4</span>),</span>
+<span id="cb1-9"><a href="#cb1-9" tabindex="-1"></a>  <span class="at">sex =</span> <span class="fu">rbinom</span>(<span class="dv">500</span>, <span class="dv">1</span>, <span class="fl">0.55</span>)</span>
+<span id="cb1-10"><a href="#cb1-10" tabindex="-1"></a>)</span>
+<span id="cb1-11"><a href="#cb1-11" tabindex="-1"></a>ipd <span class="ot">&lt;-</span> <span class="fu">set_ipd</span>(trial_a, <span class="at">treatment =</span> <span class="st">&quot;treatment&quot;</span>, <span class="at">outcome =</span> <span class="st">&quot;response&quot;</span>,</span>
+<span id="cb1-12"><a href="#cb1-12" tabindex="-1"></a>               <span class="at">covariates =</span> <span class="fu">c</span>(<span class="st">&quot;age_group&quot;</span>, <span class="st">&quot;sex&quot;</span>))</span>
+<span id="cb1-13"><a href="#cb1-13" tabindex="-1"></a></span>
+<span id="cb1-14"><a href="#cb1-14" tabindex="-1"></a><span class="co"># AgD (comparator): one row per study, with covariate summaries</span></span>
+<span id="cb1-15"><a href="#cb1-15" tabindex="-1"></a>trial_b <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
+<span id="cb1-16"><a href="#cb1-16" tabindex="-1"></a>  <span class="at">treatment =</span> <span class="st">&quot;Drug_B&quot;</span>, <span class="at">n_total =</span> <span class="dv">400</span>, <span class="at">n_events =</span> <span class="dv">160</span>,</span>
+<span id="cb1-17"><a href="#cb1-17" tabindex="-1"></a>  <span class="at">age_group_mean =</span> <span class="fl">0.35</span>, <span class="at">sex_prop =</span> <span class="fl">0.50</span></span>
 <span id="cb1-18"><a href="#cb1-18" tabindex="-1"></a>)</span>
-<span id="cb1-19"><a href="#cb1-19" tabindex="-1"></a></span>
-<span id="cb1-20"><a href="#cb1-20" tabindex="-1"></a>ipd</span>
-<span id="cb1-21"><a href="#cb1-21" tabindex="-1"></a><span class="co">#&gt; $data</span></span>
-<span id="cb1-22"><a href="#cb1-22" tabindex="-1"></a><span class="co">#&gt;        .study   .trt .outcome age_group sex</span></span>
-<span id="cb1-23"><a href="#cb1-23" tabindex="-1"></a><span class="co">#&gt; 1   IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-24"><a href="#cb1-24" tabindex="-1"></a><span class="co">#&gt; 2   IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-25"><a href="#cb1-25" tabindex="-1"></a><span class="co">#&gt; 3   IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-26"><a href="#cb1-26" tabindex="-1"></a><span class="co">#&gt; 4   IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-27"><a href="#cb1-27" tabindex="-1"></a><span class="co">#&gt; 5   IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-28"><a href="#cb1-28" tabindex="-1"></a><span class="co">#&gt; 6   IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-29"><a href="#cb1-29" tabindex="-1"></a><span class="co">#&gt; 7   IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-30"><a href="#cb1-30" tabindex="-1"></a><span class="co">#&gt; 8   IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-31"><a href="#cb1-31" tabindex="-1"></a><span class="co">#&gt; 9   IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a><span class="co">#&gt; 10  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-33"><a href="#cb1-33" tabindex="-1"></a><span class="co">#&gt; 11  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-34"><a href="#cb1-34" tabindex="-1"></a><span class="co">#&gt; 12  IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-35"><a href="#cb1-35" tabindex="-1"></a><span class="co">#&gt; 13  IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-36"><a href="#cb1-36" tabindex="-1"></a><span class="co">#&gt; 14  IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-37"><a href="#cb1-37" tabindex="-1"></a><span class="co">#&gt; 15  IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-38"><a href="#cb1-38" tabindex="-1"></a><span class="co">#&gt; 16  IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-39"><a href="#cb1-39" tabindex="-1"></a><span class="co">#&gt; 17  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-40"><a href="#cb1-40" tabindex="-1"></a><span class="co">#&gt; 18  IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-41"><a href="#cb1-41" tabindex="-1"></a><span class="co">#&gt; 19  IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-42"><a href="#cb1-42" tabindex="-1"></a><span class="co">#&gt; 20  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-43"><a href="#cb1-43" tabindex="-1"></a><span class="co">#&gt; 21  IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-44"><a href="#cb1-44" tabindex="-1"></a><span class="co">#&gt; 22  IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-45"><a href="#cb1-45" tabindex="-1"></a><span class="co">#&gt; 23  IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-46"><a href="#cb1-46" tabindex="-1"></a><span class="co">#&gt; 24  IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-47"><a href="#cb1-47" tabindex="-1"></a><span class="co">#&gt; 25  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-48"><a href="#cb1-48" tabindex="-1"></a><span class="co">#&gt; 26  IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-49"><a href="#cb1-49" tabindex="-1"></a><span class="co">#&gt; 27  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-50"><a href="#cb1-50" tabindex="-1"></a><span class="co">#&gt; 28  IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-51"><a href="#cb1-51" tabindex="-1"></a><span class="co">#&gt; 29  IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-52"><a href="#cb1-52" tabindex="-1"></a><span class="co">#&gt; 30  IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-53"><a href="#cb1-53" tabindex="-1"></a><span class="co">#&gt; 31  IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-54"><a href="#cb1-54" tabindex="-1"></a><span class="co">#&gt; 32  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-55"><a href="#cb1-55" tabindex="-1"></a><span class="co">#&gt; 33  IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-56"><a href="#cb1-56" tabindex="-1"></a><span class="co">#&gt; 34  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-57"><a href="#cb1-57" tabindex="-1"></a><span class="co">#&gt; 35  IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-58"><a href="#cb1-58" tabindex="-1"></a><span class="co">#&gt; 36  IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-59"><a href="#cb1-59" tabindex="-1"></a><span class="co">#&gt; 37  IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-60"><a href="#cb1-60" tabindex="-1"></a><span class="co">#&gt; 38  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-61"><a href="#cb1-61" tabindex="-1"></a><span class="co">#&gt; 39  IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-62"><a href="#cb1-62" tabindex="-1"></a><span class="co">#&gt; 40  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-63"><a href="#cb1-63" tabindex="-1"></a><span class="co">#&gt; 41  IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-64"><a href="#cb1-64" tabindex="-1"></a><span class="co">#&gt; 42  IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-65"><a href="#cb1-65" tabindex="-1"></a><span class="co">#&gt; 43  IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-66"><a href="#cb1-66" tabindex="-1"></a><span class="co">#&gt; 44  IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-67"><a href="#cb1-67" tabindex="-1"></a><span class="co">#&gt; 45  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-68"><a href="#cb1-68" tabindex="-1"></a><span class="co">#&gt; 46  IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-69"><a href="#cb1-69" tabindex="-1"></a><span class="co">#&gt; 47  IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-70"><a href="#cb1-70" tabindex="-1"></a><span class="co">#&gt; 48  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-71"><a href="#cb1-71" tabindex="-1"></a><span class="co">#&gt; 49  IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-72"><a href="#cb1-72" tabindex="-1"></a><span class="co">#&gt; 50  IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-73"><a href="#cb1-73" tabindex="-1"></a><span class="co">#&gt; 51  IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-74"><a href="#cb1-74" tabindex="-1"></a><span class="co">#&gt; 52  IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-75"><a href="#cb1-75" tabindex="-1"></a><span class="co">#&gt; 53  IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-76"><a href="#cb1-76" tabindex="-1"></a><span class="co">#&gt; 54  IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-77"><a href="#cb1-77" tabindex="-1"></a><span class="co">#&gt; 55  IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-78"><a href="#cb1-78" tabindex="-1"></a><span class="co">#&gt; 56  IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-79"><a href="#cb1-79" tabindex="-1"></a><span class="co">#&gt; 57  IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-80"><a href="#cb1-80" tabindex="-1"></a><span class="co">#&gt; 58  IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-81"><a href="#cb1-81" tabindex="-1"></a><span class="co">#&gt; 59  IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-82"><a href="#cb1-82" tabindex="-1"></a><span class="co">#&gt; 60  IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-83"><a href="#cb1-83" tabindex="-1"></a><span class="co">#&gt; 61  IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-84"><a href="#cb1-84" tabindex="-1"></a><span class="co">#&gt; 62  IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-85"><a href="#cb1-85" tabindex="-1"></a><span class="co">#&gt; 63  IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-86"><a href="#cb1-86" tabindex="-1"></a><span class="co">#&gt; 64  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-87"><a href="#cb1-87" tabindex="-1"></a><span class="co">#&gt; 65  IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-88"><a href="#cb1-88" tabindex="-1"></a><span class="co">#&gt; 66  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-89"><a href="#cb1-89" tabindex="-1"></a><span class="co">#&gt; 67  IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-90"><a href="#cb1-90" tabindex="-1"></a><span class="co">#&gt; 68  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-91"><a href="#cb1-91" tabindex="-1"></a><span class="co">#&gt; 69  IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-92"><a href="#cb1-92" tabindex="-1"></a><span class="co">#&gt; 70  IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-93"><a href="#cb1-93" tabindex="-1"></a><span class="co">#&gt; 71  IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-94"><a href="#cb1-94" tabindex="-1"></a><span class="co">#&gt; 72  IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-95"><a href="#cb1-95" tabindex="-1"></a><span class="co">#&gt; 73  IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-96"><a href="#cb1-96" tabindex="-1"></a><span class="co">#&gt; 74  IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-97"><a href="#cb1-97" tabindex="-1"></a><span class="co">#&gt; 75  IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-98"><a href="#cb1-98" tabindex="-1"></a><span class="co">#&gt; 76  IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-99"><a href="#cb1-99" tabindex="-1"></a><span class="co">#&gt; 77  IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-100"><a href="#cb1-100" tabindex="-1"></a><span class="co">#&gt; 78  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-101"><a href="#cb1-101" tabindex="-1"></a><span class="co">#&gt; 79  IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-102"><a href="#cb1-102" tabindex="-1"></a><span class="co">#&gt; 80  IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-103"><a href="#cb1-103" tabindex="-1"></a><span class="co">#&gt; 81  IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-104"><a href="#cb1-104" tabindex="-1"></a><span class="co">#&gt; 82  IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-105"><a href="#cb1-105" tabindex="-1"></a><span class="co">#&gt; 83  IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-106"><a href="#cb1-106" tabindex="-1"></a><span class="co">#&gt; 84  IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-107"><a href="#cb1-107" tabindex="-1"></a><span class="co">#&gt; 85  IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-108"><a href="#cb1-108" tabindex="-1"></a><span class="co">#&gt; 86  IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-109"><a href="#cb1-109" tabindex="-1"></a><span class="co">#&gt; 87  IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-110"><a href="#cb1-110" tabindex="-1"></a><span class="co">#&gt; 88  IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-111"><a href="#cb1-111" tabindex="-1"></a><span class="co">#&gt; 89  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-112"><a href="#cb1-112" tabindex="-1"></a><span class="co">#&gt; 90  IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-113"><a href="#cb1-113" tabindex="-1"></a><span class="co">#&gt; 91  IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-114"><a href="#cb1-114" tabindex="-1"></a><span class="co">#&gt; 92  IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-115"><a href="#cb1-115" tabindex="-1"></a><span class="co">#&gt; 93  IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-116"><a href="#cb1-116" tabindex="-1"></a><span class="co">#&gt; 94  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-117"><a href="#cb1-117" tabindex="-1"></a><span class="co">#&gt; 95  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-118"><a href="#cb1-118" tabindex="-1"></a><span class="co">#&gt; 96  IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-119"><a href="#cb1-119" tabindex="-1"></a><span class="co">#&gt; 97  IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-120"><a href="#cb1-120" tabindex="-1"></a><span class="co">#&gt; 98  IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-121"><a href="#cb1-121" tabindex="-1"></a><span class="co">#&gt; 99  IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-122"><a href="#cb1-122" tabindex="-1"></a><span class="co">#&gt; 100 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-123"><a href="#cb1-123" tabindex="-1"></a><span class="co">#&gt; 101 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-124"><a href="#cb1-124" tabindex="-1"></a><span class="co">#&gt; 102 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-125"><a href="#cb1-125" tabindex="-1"></a><span class="co">#&gt; 103 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-126"><a href="#cb1-126" tabindex="-1"></a><span class="co">#&gt; 104 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-127"><a href="#cb1-127" tabindex="-1"></a><span class="co">#&gt; 105 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-128"><a href="#cb1-128" tabindex="-1"></a><span class="co">#&gt; 106 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-129"><a href="#cb1-129" tabindex="-1"></a><span class="co">#&gt; 107 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-130"><a href="#cb1-130" tabindex="-1"></a><span class="co">#&gt; 108 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-131"><a href="#cb1-131" tabindex="-1"></a><span class="co">#&gt; 109 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-132"><a href="#cb1-132" tabindex="-1"></a><span class="co">#&gt; 110 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-133"><a href="#cb1-133" tabindex="-1"></a><span class="co">#&gt; 111 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-134"><a href="#cb1-134" tabindex="-1"></a><span class="co">#&gt; 112 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-135"><a href="#cb1-135" tabindex="-1"></a><span class="co">#&gt; 113 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-136"><a href="#cb1-136" tabindex="-1"></a><span class="co">#&gt; 114 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-137"><a href="#cb1-137" tabindex="-1"></a><span class="co">#&gt; 115 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-138"><a href="#cb1-138" tabindex="-1"></a><span class="co">#&gt; 116 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-139"><a href="#cb1-139" tabindex="-1"></a><span class="co">#&gt; 117 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-140"><a href="#cb1-140" tabindex="-1"></a><span class="co">#&gt; 118 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-141"><a href="#cb1-141" tabindex="-1"></a><span class="co">#&gt; 119 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-142"><a href="#cb1-142" tabindex="-1"></a><span class="co">#&gt; 120 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-143"><a href="#cb1-143" tabindex="-1"></a><span class="co">#&gt; 121 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-144"><a href="#cb1-144" tabindex="-1"></a><span class="co">#&gt; 122 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-145"><a href="#cb1-145" tabindex="-1"></a><span class="co">#&gt; 123 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-146"><a href="#cb1-146" tabindex="-1"></a><span class="co">#&gt; 124 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-147"><a href="#cb1-147" tabindex="-1"></a><span class="co">#&gt; 125 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-148"><a href="#cb1-148" tabindex="-1"></a><span class="co">#&gt; 126 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-149"><a href="#cb1-149" tabindex="-1"></a><span class="co">#&gt; 127 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-150"><a href="#cb1-150" tabindex="-1"></a><span class="co">#&gt; 128 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-151"><a href="#cb1-151" tabindex="-1"></a><span class="co">#&gt; 129 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-152"><a href="#cb1-152" tabindex="-1"></a><span class="co">#&gt; 130 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-153"><a href="#cb1-153" tabindex="-1"></a><span class="co">#&gt; 131 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-154"><a href="#cb1-154" tabindex="-1"></a><span class="co">#&gt; 132 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-155"><a href="#cb1-155" tabindex="-1"></a><span class="co">#&gt; 133 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-156"><a href="#cb1-156" tabindex="-1"></a><span class="co">#&gt; 134 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-157"><a href="#cb1-157" tabindex="-1"></a><span class="co">#&gt; 135 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-158"><a href="#cb1-158" tabindex="-1"></a><span class="co">#&gt; 136 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-159"><a href="#cb1-159" tabindex="-1"></a><span class="co">#&gt; 137 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-160"><a href="#cb1-160" tabindex="-1"></a><span class="co">#&gt; 138 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-161"><a href="#cb1-161" tabindex="-1"></a><span class="co">#&gt; 139 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-162"><a href="#cb1-162" tabindex="-1"></a><span class="co">#&gt; 140 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-163"><a href="#cb1-163" tabindex="-1"></a><span class="co">#&gt; 141 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-164"><a href="#cb1-164" tabindex="-1"></a><span class="co">#&gt; 142 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-165"><a href="#cb1-165" tabindex="-1"></a><span class="co">#&gt; 143 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-166"><a href="#cb1-166" tabindex="-1"></a><span class="co">#&gt; 144 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-167"><a href="#cb1-167" tabindex="-1"></a><span class="co">#&gt; 145 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-168"><a href="#cb1-168" tabindex="-1"></a><span class="co">#&gt; 146 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-169"><a href="#cb1-169" tabindex="-1"></a><span class="co">#&gt; 147 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-170"><a href="#cb1-170" tabindex="-1"></a><span class="co">#&gt; 148 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-171"><a href="#cb1-171" tabindex="-1"></a><span class="co">#&gt; 149 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-172"><a href="#cb1-172" tabindex="-1"></a><span class="co">#&gt; 150 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-173"><a href="#cb1-173" tabindex="-1"></a><span class="co">#&gt; 151 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-174"><a href="#cb1-174" tabindex="-1"></a><span class="co">#&gt; 152 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-175"><a href="#cb1-175" tabindex="-1"></a><span class="co">#&gt; 153 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-176"><a href="#cb1-176" tabindex="-1"></a><span class="co">#&gt; 154 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-177"><a href="#cb1-177" tabindex="-1"></a><span class="co">#&gt; 155 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-178"><a href="#cb1-178" tabindex="-1"></a><span class="co">#&gt; 156 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-179"><a href="#cb1-179" tabindex="-1"></a><span class="co">#&gt; 157 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-180"><a href="#cb1-180" tabindex="-1"></a><span class="co">#&gt; 158 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-181"><a href="#cb1-181" tabindex="-1"></a><span class="co">#&gt; 159 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-182"><a href="#cb1-182" tabindex="-1"></a><span class="co">#&gt; 160 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-183"><a href="#cb1-183" tabindex="-1"></a><span class="co">#&gt; 161 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-184"><a href="#cb1-184" tabindex="-1"></a><span class="co">#&gt; 162 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-185"><a href="#cb1-185" tabindex="-1"></a><span class="co">#&gt; 163 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-186"><a href="#cb1-186" tabindex="-1"></a><span class="co">#&gt; 164 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-187"><a href="#cb1-187" tabindex="-1"></a><span class="co">#&gt; 165 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-188"><a href="#cb1-188" tabindex="-1"></a><span class="co">#&gt; 166 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-189"><a href="#cb1-189" tabindex="-1"></a><span class="co">#&gt; 167 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-190"><a href="#cb1-190" tabindex="-1"></a><span class="co">#&gt; 168 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-191"><a href="#cb1-191" tabindex="-1"></a><span class="co">#&gt; 169 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-192"><a href="#cb1-192" tabindex="-1"></a><span class="co">#&gt; 170 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-193"><a href="#cb1-193" tabindex="-1"></a><span class="co">#&gt; 171 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-194"><a href="#cb1-194" tabindex="-1"></a><span class="co">#&gt; 172 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-195"><a href="#cb1-195" tabindex="-1"></a><span class="co">#&gt; 173 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-196"><a href="#cb1-196" tabindex="-1"></a><span class="co">#&gt; 174 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-197"><a href="#cb1-197" tabindex="-1"></a><span class="co">#&gt; 175 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-198"><a href="#cb1-198" tabindex="-1"></a><span class="co">#&gt; 176 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-199"><a href="#cb1-199" tabindex="-1"></a><span class="co">#&gt; 177 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-200"><a href="#cb1-200" tabindex="-1"></a><span class="co">#&gt; 178 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-201"><a href="#cb1-201" tabindex="-1"></a><span class="co">#&gt; 179 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-202"><a href="#cb1-202" tabindex="-1"></a><span class="co">#&gt; 180 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-203"><a href="#cb1-203" tabindex="-1"></a><span class="co">#&gt; 181 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-204"><a href="#cb1-204" tabindex="-1"></a><span class="co">#&gt; 182 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-205"><a href="#cb1-205" tabindex="-1"></a><span class="co">#&gt; 183 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-206"><a href="#cb1-206" tabindex="-1"></a><span class="co">#&gt; 184 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-207"><a href="#cb1-207" tabindex="-1"></a><span class="co">#&gt; 185 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-208"><a href="#cb1-208" tabindex="-1"></a><span class="co">#&gt; 186 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-209"><a href="#cb1-209" tabindex="-1"></a><span class="co">#&gt; 187 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-210"><a href="#cb1-210" tabindex="-1"></a><span class="co">#&gt; 188 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-211"><a href="#cb1-211" tabindex="-1"></a><span class="co">#&gt; 189 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-212"><a href="#cb1-212" tabindex="-1"></a><span class="co">#&gt; 190 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-213"><a href="#cb1-213" tabindex="-1"></a><span class="co">#&gt; 191 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-214"><a href="#cb1-214" tabindex="-1"></a><span class="co">#&gt; 192 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-215"><a href="#cb1-215" tabindex="-1"></a><span class="co">#&gt; 193 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-216"><a href="#cb1-216" tabindex="-1"></a><span class="co">#&gt; 194 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-217"><a href="#cb1-217" tabindex="-1"></a><span class="co">#&gt; 195 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-218"><a href="#cb1-218" tabindex="-1"></a><span class="co">#&gt; 196 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-219"><a href="#cb1-219" tabindex="-1"></a><span class="co">#&gt; 197 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-220"><a href="#cb1-220" tabindex="-1"></a><span class="co">#&gt; 198 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-221"><a href="#cb1-221" tabindex="-1"></a><span class="co">#&gt; 199 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-222"><a href="#cb1-222" tabindex="-1"></a><span class="co">#&gt; 200 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-223"><a href="#cb1-223" tabindex="-1"></a><span class="co">#&gt; 201 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-224"><a href="#cb1-224" tabindex="-1"></a><span class="co">#&gt; 202 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-225"><a href="#cb1-225" tabindex="-1"></a><span class="co">#&gt; 203 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-226"><a href="#cb1-226" tabindex="-1"></a><span class="co">#&gt; 204 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-227"><a href="#cb1-227" tabindex="-1"></a><span class="co">#&gt; 205 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-228"><a href="#cb1-228" tabindex="-1"></a><span class="co">#&gt; 206 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-229"><a href="#cb1-229" tabindex="-1"></a><span class="co">#&gt; 207 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-230"><a href="#cb1-230" tabindex="-1"></a><span class="co">#&gt; 208 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-231"><a href="#cb1-231" tabindex="-1"></a><span class="co">#&gt; 209 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-232"><a href="#cb1-232" tabindex="-1"></a><span class="co">#&gt; 210 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-233"><a href="#cb1-233" tabindex="-1"></a><span class="co">#&gt; 211 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-234"><a href="#cb1-234" tabindex="-1"></a><span class="co">#&gt; 212 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-235"><a href="#cb1-235" tabindex="-1"></a><span class="co">#&gt; 213 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-236"><a href="#cb1-236" tabindex="-1"></a><span class="co">#&gt; 214 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-237"><a href="#cb1-237" tabindex="-1"></a><span class="co">#&gt; 215 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-238"><a href="#cb1-238" tabindex="-1"></a><span class="co">#&gt; 216 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-239"><a href="#cb1-239" tabindex="-1"></a><span class="co">#&gt; 217 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-240"><a href="#cb1-240" tabindex="-1"></a><span class="co">#&gt; 218 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-241"><a href="#cb1-241" tabindex="-1"></a><span class="co">#&gt; 219 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-242"><a href="#cb1-242" tabindex="-1"></a><span class="co">#&gt; 220 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-243"><a href="#cb1-243" tabindex="-1"></a><span class="co">#&gt; 221 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-244"><a href="#cb1-244" tabindex="-1"></a><span class="co">#&gt; 222 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-245"><a href="#cb1-245" tabindex="-1"></a><span class="co">#&gt; 223 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-246"><a href="#cb1-246" tabindex="-1"></a><span class="co">#&gt; 224 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-247"><a href="#cb1-247" tabindex="-1"></a><span class="co">#&gt; 225 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-248"><a href="#cb1-248" tabindex="-1"></a><span class="co">#&gt; 226 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-249"><a href="#cb1-249" tabindex="-1"></a><span class="co">#&gt; 227 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-250"><a href="#cb1-250" tabindex="-1"></a><span class="co">#&gt; 228 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-251"><a href="#cb1-251" tabindex="-1"></a><span class="co">#&gt; 229 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-252"><a href="#cb1-252" tabindex="-1"></a><span class="co">#&gt; 230 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-253"><a href="#cb1-253" tabindex="-1"></a><span class="co">#&gt; 231 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-254"><a href="#cb1-254" tabindex="-1"></a><span class="co">#&gt; 232 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-255"><a href="#cb1-255" tabindex="-1"></a><span class="co">#&gt; 233 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-256"><a href="#cb1-256" tabindex="-1"></a><span class="co">#&gt; 234 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-257"><a href="#cb1-257" tabindex="-1"></a><span class="co">#&gt; 235 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-258"><a href="#cb1-258" tabindex="-1"></a><span class="co">#&gt; 236 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-259"><a href="#cb1-259" tabindex="-1"></a><span class="co">#&gt; 237 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-260"><a href="#cb1-260" tabindex="-1"></a><span class="co">#&gt; 238 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-261"><a href="#cb1-261" tabindex="-1"></a><span class="co">#&gt; 239 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-262"><a href="#cb1-262" tabindex="-1"></a><span class="co">#&gt; 240 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-263"><a href="#cb1-263" tabindex="-1"></a><span class="co">#&gt; 241 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-264"><a href="#cb1-264" tabindex="-1"></a><span class="co">#&gt; 242 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-265"><a href="#cb1-265" tabindex="-1"></a><span class="co">#&gt; 243 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-266"><a href="#cb1-266" tabindex="-1"></a><span class="co">#&gt; 244 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-267"><a href="#cb1-267" tabindex="-1"></a><span class="co">#&gt; 245 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-268"><a href="#cb1-268" tabindex="-1"></a><span class="co">#&gt; 246 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-269"><a href="#cb1-269" tabindex="-1"></a><span class="co">#&gt; 247 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-270"><a href="#cb1-270" tabindex="-1"></a><span class="co">#&gt; 248 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-271"><a href="#cb1-271" tabindex="-1"></a><span class="co">#&gt; 249 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-272"><a href="#cb1-272" tabindex="-1"></a><span class="co">#&gt; 250 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-273"><a href="#cb1-273" tabindex="-1"></a><span class="co">#&gt; 251 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-274"><a href="#cb1-274" tabindex="-1"></a><span class="co">#&gt; 252 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-275"><a href="#cb1-275" tabindex="-1"></a><span class="co">#&gt; 253 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-276"><a href="#cb1-276" tabindex="-1"></a><span class="co">#&gt; 254 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-277"><a href="#cb1-277" tabindex="-1"></a><span class="co">#&gt; 255 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-278"><a href="#cb1-278" tabindex="-1"></a><span class="co">#&gt; 256 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-279"><a href="#cb1-279" tabindex="-1"></a><span class="co">#&gt; 257 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-280"><a href="#cb1-280" tabindex="-1"></a><span class="co">#&gt; 258 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-281"><a href="#cb1-281" tabindex="-1"></a><span class="co">#&gt; 259 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-282"><a href="#cb1-282" tabindex="-1"></a><span class="co">#&gt; 260 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-283"><a href="#cb1-283" tabindex="-1"></a><span class="co">#&gt; 261 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-284"><a href="#cb1-284" tabindex="-1"></a><span class="co">#&gt; 262 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-285"><a href="#cb1-285" tabindex="-1"></a><span class="co">#&gt; 263 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-286"><a href="#cb1-286" tabindex="-1"></a><span class="co">#&gt; 264 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-287"><a href="#cb1-287" tabindex="-1"></a><span class="co">#&gt; 265 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-288"><a href="#cb1-288" tabindex="-1"></a><span class="co">#&gt; 266 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-289"><a href="#cb1-289" tabindex="-1"></a><span class="co">#&gt; 267 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-290"><a href="#cb1-290" tabindex="-1"></a><span class="co">#&gt; 268 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-291"><a href="#cb1-291" tabindex="-1"></a><span class="co">#&gt; 269 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-292"><a href="#cb1-292" tabindex="-1"></a><span class="co">#&gt; 270 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-293"><a href="#cb1-293" tabindex="-1"></a><span class="co">#&gt; 271 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-294"><a href="#cb1-294" tabindex="-1"></a><span class="co">#&gt; 272 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-295"><a href="#cb1-295" tabindex="-1"></a><span class="co">#&gt; 273 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-296"><a href="#cb1-296" tabindex="-1"></a><span class="co">#&gt; 274 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-297"><a href="#cb1-297" tabindex="-1"></a><span class="co">#&gt; 275 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-298"><a href="#cb1-298" tabindex="-1"></a><span class="co">#&gt; 276 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-299"><a href="#cb1-299" tabindex="-1"></a><span class="co">#&gt; 277 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-300"><a href="#cb1-300" tabindex="-1"></a><span class="co">#&gt; 278 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-301"><a href="#cb1-301" tabindex="-1"></a><span class="co">#&gt; 279 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-302"><a href="#cb1-302" tabindex="-1"></a><span class="co">#&gt; 280 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-303"><a href="#cb1-303" tabindex="-1"></a><span class="co">#&gt; 281 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-304"><a href="#cb1-304" tabindex="-1"></a><span class="co">#&gt; 282 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-305"><a href="#cb1-305" tabindex="-1"></a><span class="co">#&gt; 283 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-306"><a href="#cb1-306" tabindex="-1"></a><span class="co">#&gt; 284 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-307"><a href="#cb1-307" tabindex="-1"></a><span class="co">#&gt; 285 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-308"><a href="#cb1-308" tabindex="-1"></a><span class="co">#&gt; 286 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-309"><a href="#cb1-309" tabindex="-1"></a><span class="co">#&gt; 287 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-310"><a href="#cb1-310" tabindex="-1"></a><span class="co">#&gt; 288 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-311"><a href="#cb1-311" tabindex="-1"></a><span class="co">#&gt; 289 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-312"><a href="#cb1-312" tabindex="-1"></a><span class="co">#&gt; 290 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-313"><a href="#cb1-313" tabindex="-1"></a><span class="co">#&gt; 291 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-314"><a href="#cb1-314" tabindex="-1"></a><span class="co">#&gt; 292 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-315"><a href="#cb1-315" tabindex="-1"></a><span class="co">#&gt; 293 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-316"><a href="#cb1-316" tabindex="-1"></a><span class="co">#&gt; 294 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-317"><a href="#cb1-317" tabindex="-1"></a><span class="co">#&gt; 295 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-318"><a href="#cb1-318" tabindex="-1"></a><span class="co">#&gt; 296 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-319"><a href="#cb1-319" tabindex="-1"></a><span class="co">#&gt; 297 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-320"><a href="#cb1-320" tabindex="-1"></a><span class="co">#&gt; 298 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-321"><a href="#cb1-321" tabindex="-1"></a><span class="co">#&gt; 299 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-322"><a href="#cb1-322" tabindex="-1"></a><span class="co">#&gt; 300 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-323"><a href="#cb1-323" tabindex="-1"></a><span class="co">#&gt; 301 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-324"><a href="#cb1-324" tabindex="-1"></a><span class="co">#&gt; 302 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-325"><a href="#cb1-325" tabindex="-1"></a><span class="co">#&gt; 303 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-326"><a href="#cb1-326" tabindex="-1"></a><span class="co">#&gt; 304 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-327"><a href="#cb1-327" tabindex="-1"></a><span class="co">#&gt; 305 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-328"><a href="#cb1-328" tabindex="-1"></a><span class="co">#&gt; 306 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-329"><a href="#cb1-329" tabindex="-1"></a><span class="co">#&gt; 307 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-330"><a href="#cb1-330" tabindex="-1"></a><span class="co">#&gt; 308 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-331"><a href="#cb1-331" tabindex="-1"></a><span class="co">#&gt; 309 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-332"><a href="#cb1-332" tabindex="-1"></a><span class="co">#&gt; 310 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-333"><a href="#cb1-333" tabindex="-1"></a><span class="co">#&gt; 311 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-334"><a href="#cb1-334" tabindex="-1"></a><span class="co">#&gt; 312 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-335"><a href="#cb1-335" tabindex="-1"></a><span class="co">#&gt; 313 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-336"><a href="#cb1-336" tabindex="-1"></a><span class="co">#&gt; 314 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-337"><a href="#cb1-337" tabindex="-1"></a><span class="co">#&gt; 315 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-338"><a href="#cb1-338" tabindex="-1"></a><span class="co">#&gt; 316 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-339"><a href="#cb1-339" tabindex="-1"></a><span class="co">#&gt; 317 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-340"><a href="#cb1-340" tabindex="-1"></a><span class="co">#&gt; 318 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-341"><a href="#cb1-341" tabindex="-1"></a><span class="co">#&gt; 319 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-342"><a href="#cb1-342" tabindex="-1"></a><span class="co">#&gt; 320 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-343"><a href="#cb1-343" tabindex="-1"></a><span class="co">#&gt; 321 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-344"><a href="#cb1-344" tabindex="-1"></a><span class="co">#&gt; 322 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-345"><a href="#cb1-345" tabindex="-1"></a><span class="co">#&gt; 323 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-346"><a href="#cb1-346" tabindex="-1"></a><span class="co">#&gt; 324 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-347"><a href="#cb1-347" tabindex="-1"></a><span class="co">#&gt; 325 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-348"><a href="#cb1-348" tabindex="-1"></a><span class="co">#&gt; 326 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-349"><a href="#cb1-349" tabindex="-1"></a><span class="co">#&gt; 327 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-350"><a href="#cb1-350" tabindex="-1"></a><span class="co">#&gt; 328 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-351"><a href="#cb1-351" tabindex="-1"></a><span class="co">#&gt; 329 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-352"><a href="#cb1-352" tabindex="-1"></a><span class="co">#&gt; 330 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-353"><a href="#cb1-353" tabindex="-1"></a><span class="co">#&gt; 331 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-354"><a href="#cb1-354" tabindex="-1"></a><span class="co">#&gt; 332 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-355"><a href="#cb1-355" tabindex="-1"></a><span class="co">#&gt; 333 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-356"><a href="#cb1-356" tabindex="-1"></a><span class="co">#&gt; 334 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-357"><a href="#cb1-357" tabindex="-1"></a><span class="co">#&gt; 335 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-358"><a href="#cb1-358" tabindex="-1"></a><span class="co">#&gt; 336 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-359"><a href="#cb1-359" tabindex="-1"></a><span class="co">#&gt; 337 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-360"><a href="#cb1-360" tabindex="-1"></a><span class="co">#&gt; 338 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-361"><a href="#cb1-361" tabindex="-1"></a><span class="co">#&gt; 339 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-362"><a href="#cb1-362" tabindex="-1"></a><span class="co">#&gt; 340 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-363"><a href="#cb1-363" tabindex="-1"></a><span class="co">#&gt; 341 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-364"><a href="#cb1-364" tabindex="-1"></a><span class="co">#&gt; 342 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-365"><a href="#cb1-365" tabindex="-1"></a><span class="co">#&gt; 343 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-366"><a href="#cb1-366" tabindex="-1"></a><span class="co">#&gt; 344 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-367"><a href="#cb1-367" tabindex="-1"></a><span class="co">#&gt; 345 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-368"><a href="#cb1-368" tabindex="-1"></a><span class="co">#&gt; 346 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-369"><a href="#cb1-369" tabindex="-1"></a><span class="co">#&gt; 347 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-370"><a href="#cb1-370" tabindex="-1"></a><span class="co">#&gt; 348 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-371"><a href="#cb1-371" tabindex="-1"></a><span class="co">#&gt; 349 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-372"><a href="#cb1-372" tabindex="-1"></a><span class="co">#&gt; 350 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-373"><a href="#cb1-373" tabindex="-1"></a><span class="co">#&gt; 351 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-374"><a href="#cb1-374" tabindex="-1"></a><span class="co">#&gt; 352 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-375"><a href="#cb1-375" tabindex="-1"></a><span class="co">#&gt; 353 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-376"><a href="#cb1-376" tabindex="-1"></a><span class="co">#&gt; 354 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-377"><a href="#cb1-377" tabindex="-1"></a><span class="co">#&gt; 355 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-378"><a href="#cb1-378" tabindex="-1"></a><span class="co">#&gt; 356 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-379"><a href="#cb1-379" tabindex="-1"></a><span class="co">#&gt; 357 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-380"><a href="#cb1-380" tabindex="-1"></a><span class="co">#&gt; 358 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-381"><a href="#cb1-381" tabindex="-1"></a><span class="co">#&gt; 359 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-382"><a href="#cb1-382" tabindex="-1"></a><span class="co">#&gt; 360 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-383"><a href="#cb1-383" tabindex="-1"></a><span class="co">#&gt; 361 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-384"><a href="#cb1-384" tabindex="-1"></a><span class="co">#&gt; 362 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-385"><a href="#cb1-385" tabindex="-1"></a><span class="co">#&gt; 363 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-386"><a href="#cb1-386" tabindex="-1"></a><span class="co">#&gt; 364 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-387"><a href="#cb1-387" tabindex="-1"></a><span class="co">#&gt; 365 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-388"><a href="#cb1-388" tabindex="-1"></a><span class="co">#&gt; 366 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-389"><a href="#cb1-389" tabindex="-1"></a><span class="co">#&gt; 367 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-390"><a href="#cb1-390" tabindex="-1"></a><span class="co">#&gt; 368 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-391"><a href="#cb1-391" tabindex="-1"></a><span class="co">#&gt; 369 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-392"><a href="#cb1-392" tabindex="-1"></a><span class="co">#&gt; 370 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-393"><a href="#cb1-393" tabindex="-1"></a><span class="co">#&gt; 371 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-394"><a href="#cb1-394" tabindex="-1"></a><span class="co">#&gt; 372 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-395"><a href="#cb1-395" tabindex="-1"></a><span class="co">#&gt; 373 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-396"><a href="#cb1-396" tabindex="-1"></a><span class="co">#&gt; 374 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-397"><a href="#cb1-397" tabindex="-1"></a><span class="co">#&gt; 375 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-398"><a href="#cb1-398" tabindex="-1"></a><span class="co">#&gt; 376 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-399"><a href="#cb1-399" tabindex="-1"></a><span class="co">#&gt; 377 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-400"><a href="#cb1-400" tabindex="-1"></a><span class="co">#&gt; 378 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-401"><a href="#cb1-401" tabindex="-1"></a><span class="co">#&gt; 379 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-402"><a href="#cb1-402" tabindex="-1"></a><span class="co">#&gt; 380 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-403"><a href="#cb1-403" tabindex="-1"></a><span class="co">#&gt; 381 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-404"><a href="#cb1-404" tabindex="-1"></a><span class="co">#&gt; 382 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-405"><a href="#cb1-405" tabindex="-1"></a><span class="co">#&gt; 383 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-406"><a href="#cb1-406" tabindex="-1"></a><span class="co">#&gt; 384 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-407"><a href="#cb1-407" tabindex="-1"></a><span class="co">#&gt; 385 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-408"><a href="#cb1-408" tabindex="-1"></a><span class="co">#&gt; 386 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-409"><a href="#cb1-409" tabindex="-1"></a><span class="co">#&gt; 387 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-410"><a href="#cb1-410" tabindex="-1"></a><span class="co">#&gt; 388 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-411"><a href="#cb1-411" tabindex="-1"></a><span class="co">#&gt; 389 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-412"><a href="#cb1-412" tabindex="-1"></a><span class="co">#&gt; 390 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-413"><a href="#cb1-413" tabindex="-1"></a><span class="co">#&gt; 391 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-414"><a href="#cb1-414" tabindex="-1"></a><span class="co">#&gt; 392 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-415"><a href="#cb1-415" tabindex="-1"></a><span class="co">#&gt; 393 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-416"><a href="#cb1-416" tabindex="-1"></a><span class="co">#&gt; 394 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-417"><a href="#cb1-417" tabindex="-1"></a><span class="co">#&gt; 395 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-418"><a href="#cb1-418" tabindex="-1"></a><span class="co">#&gt; 396 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-419"><a href="#cb1-419" tabindex="-1"></a><span class="co">#&gt; 397 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-420"><a href="#cb1-420" tabindex="-1"></a><span class="co">#&gt; 398 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-421"><a href="#cb1-421" tabindex="-1"></a><span class="co">#&gt; 399 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-422"><a href="#cb1-422" tabindex="-1"></a><span class="co">#&gt; 400 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-423"><a href="#cb1-423" tabindex="-1"></a><span class="co">#&gt; 401 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-424"><a href="#cb1-424" tabindex="-1"></a><span class="co">#&gt; 402 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-425"><a href="#cb1-425" tabindex="-1"></a><span class="co">#&gt; 403 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-426"><a href="#cb1-426" tabindex="-1"></a><span class="co">#&gt; 404 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-427"><a href="#cb1-427" tabindex="-1"></a><span class="co">#&gt; 405 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-428"><a href="#cb1-428" tabindex="-1"></a><span class="co">#&gt; 406 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-429"><a href="#cb1-429" tabindex="-1"></a><span class="co">#&gt; 407 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-430"><a href="#cb1-430" tabindex="-1"></a><span class="co">#&gt; 408 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-431"><a href="#cb1-431" tabindex="-1"></a><span class="co">#&gt; 409 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-432"><a href="#cb1-432" tabindex="-1"></a><span class="co">#&gt; 410 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-433"><a href="#cb1-433" tabindex="-1"></a><span class="co">#&gt; 411 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-434"><a href="#cb1-434" tabindex="-1"></a><span class="co">#&gt; 412 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-435"><a href="#cb1-435" tabindex="-1"></a><span class="co">#&gt; 413 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-436"><a href="#cb1-436" tabindex="-1"></a><span class="co">#&gt; 414 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-437"><a href="#cb1-437" tabindex="-1"></a><span class="co">#&gt; 415 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-438"><a href="#cb1-438" tabindex="-1"></a><span class="co">#&gt; 416 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-439"><a href="#cb1-439" tabindex="-1"></a><span class="co">#&gt; 417 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-440"><a href="#cb1-440" tabindex="-1"></a><span class="co">#&gt; 418 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-441"><a href="#cb1-441" tabindex="-1"></a><span class="co">#&gt; 419 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-442"><a href="#cb1-442" tabindex="-1"></a><span class="co">#&gt; 420 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-443"><a href="#cb1-443" tabindex="-1"></a><span class="co">#&gt; 421 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-444"><a href="#cb1-444" tabindex="-1"></a><span class="co">#&gt; 422 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-445"><a href="#cb1-445" tabindex="-1"></a><span class="co">#&gt; 423 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-446"><a href="#cb1-446" tabindex="-1"></a><span class="co">#&gt; 424 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-447"><a href="#cb1-447" tabindex="-1"></a><span class="co">#&gt; 425 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-448"><a href="#cb1-448" tabindex="-1"></a><span class="co">#&gt; 426 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-449"><a href="#cb1-449" tabindex="-1"></a><span class="co">#&gt; 427 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-450"><a href="#cb1-450" tabindex="-1"></a><span class="co">#&gt; 428 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-451"><a href="#cb1-451" tabindex="-1"></a><span class="co">#&gt; 429 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-452"><a href="#cb1-452" tabindex="-1"></a><span class="co">#&gt; 430 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-453"><a href="#cb1-453" tabindex="-1"></a><span class="co">#&gt; 431 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-454"><a href="#cb1-454" tabindex="-1"></a><span class="co">#&gt; 432 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-455"><a href="#cb1-455" tabindex="-1"></a><span class="co">#&gt; 433 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-456"><a href="#cb1-456" tabindex="-1"></a><span class="co">#&gt; 434 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-457"><a href="#cb1-457" tabindex="-1"></a><span class="co">#&gt; 435 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-458"><a href="#cb1-458" tabindex="-1"></a><span class="co">#&gt; 436 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-459"><a href="#cb1-459" tabindex="-1"></a><span class="co">#&gt; 437 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-460"><a href="#cb1-460" tabindex="-1"></a><span class="co">#&gt; 438 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-461"><a href="#cb1-461" tabindex="-1"></a><span class="co">#&gt; 439 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-462"><a href="#cb1-462" tabindex="-1"></a><span class="co">#&gt; 440 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-463"><a href="#cb1-463" tabindex="-1"></a><span class="co">#&gt; 441 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-464"><a href="#cb1-464" tabindex="-1"></a><span class="co">#&gt; 442 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-465"><a href="#cb1-465" tabindex="-1"></a><span class="co">#&gt; 443 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-466"><a href="#cb1-466" tabindex="-1"></a><span class="co">#&gt; 444 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-467"><a href="#cb1-467" tabindex="-1"></a><span class="co">#&gt; 445 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-468"><a href="#cb1-468" tabindex="-1"></a><span class="co">#&gt; 446 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-469"><a href="#cb1-469" tabindex="-1"></a><span class="co">#&gt; 447 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-470"><a href="#cb1-470" tabindex="-1"></a><span class="co">#&gt; 448 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-471"><a href="#cb1-471" tabindex="-1"></a><span class="co">#&gt; 449 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-472"><a href="#cb1-472" tabindex="-1"></a><span class="co">#&gt; 450 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-473"><a href="#cb1-473" tabindex="-1"></a><span class="co">#&gt; 451 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-474"><a href="#cb1-474" tabindex="-1"></a><span class="co">#&gt; 452 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-475"><a href="#cb1-475" tabindex="-1"></a><span class="co">#&gt; 453 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-476"><a href="#cb1-476" tabindex="-1"></a><span class="co">#&gt; 454 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-477"><a href="#cb1-477" tabindex="-1"></a><span class="co">#&gt; 455 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-478"><a href="#cb1-478" tabindex="-1"></a><span class="co">#&gt; 456 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-479"><a href="#cb1-479" tabindex="-1"></a><span class="co">#&gt; 457 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-480"><a href="#cb1-480" tabindex="-1"></a><span class="co">#&gt; 458 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-481"><a href="#cb1-481" tabindex="-1"></a><span class="co">#&gt; 459 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-482"><a href="#cb1-482" tabindex="-1"></a><span class="co">#&gt; 460 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-483"><a href="#cb1-483" tabindex="-1"></a><span class="co">#&gt; 461 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-484"><a href="#cb1-484" tabindex="-1"></a><span class="co">#&gt; 462 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-485"><a href="#cb1-485" tabindex="-1"></a><span class="co">#&gt; 463 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-486"><a href="#cb1-486" tabindex="-1"></a><span class="co">#&gt; 464 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-487"><a href="#cb1-487" tabindex="-1"></a><span class="co">#&gt; 465 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-488"><a href="#cb1-488" tabindex="-1"></a><span class="co">#&gt; 466 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-489"><a href="#cb1-489" tabindex="-1"></a><span class="co">#&gt; 467 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-490"><a href="#cb1-490" tabindex="-1"></a><span class="co">#&gt; 468 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-491"><a href="#cb1-491" tabindex="-1"></a><span class="co">#&gt; 469 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-492"><a href="#cb1-492" tabindex="-1"></a><span class="co">#&gt; 470 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-493"><a href="#cb1-493" tabindex="-1"></a><span class="co">#&gt; 471 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-494"><a href="#cb1-494" tabindex="-1"></a><span class="co">#&gt; 472 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-495"><a href="#cb1-495" tabindex="-1"></a><span class="co">#&gt; 473 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-496"><a href="#cb1-496" tabindex="-1"></a><span class="co">#&gt; 474 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-497"><a href="#cb1-497" tabindex="-1"></a><span class="co">#&gt; 475 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-498"><a href="#cb1-498" tabindex="-1"></a><span class="co">#&gt; 476 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-499"><a href="#cb1-499" tabindex="-1"></a><span class="co">#&gt; 477 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-500"><a href="#cb1-500" tabindex="-1"></a><span class="co">#&gt; 478 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-501"><a href="#cb1-501" tabindex="-1"></a><span class="co">#&gt; 479 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-502"><a href="#cb1-502" tabindex="-1"></a><span class="co">#&gt; 480 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-503"><a href="#cb1-503" tabindex="-1"></a><span class="co">#&gt; 481 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-504"><a href="#cb1-504" tabindex="-1"></a><span class="co">#&gt; 482 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-505"><a href="#cb1-505" tabindex="-1"></a><span class="co">#&gt; 483 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-506"><a href="#cb1-506" tabindex="-1"></a><span class="co">#&gt; 484 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-507"><a href="#cb1-507" tabindex="-1"></a><span class="co">#&gt; 485 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-508"><a href="#cb1-508" tabindex="-1"></a><span class="co">#&gt; 486 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-509"><a href="#cb1-509" tabindex="-1"></a><span class="co">#&gt; 487 IPD_Study Drug_A        0         1   1</span></span>
-<span id="cb1-510"><a href="#cb1-510" tabindex="-1"></a><span class="co">#&gt; 488 IPD_Study Drug_A        1         1   0</span></span>
-<span id="cb1-511"><a href="#cb1-511" tabindex="-1"></a><span class="co">#&gt; 489 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-512"><a href="#cb1-512" tabindex="-1"></a><span class="co">#&gt; 490 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-513"><a href="#cb1-513" tabindex="-1"></a><span class="co">#&gt; 491 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-514"><a href="#cb1-514" tabindex="-1"></a><span class="co">#&gt; 492 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-515"><a href="#cb1-515" tabindex="-1"></a><span class="co">#&gt; 493 IPD_Study Drug_A        1         1   1</span></span>
-<span id="cb1-516"><a href="#cb1-516" tabindex="-1"></a><span class="co">#&gt; 494 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-517"><a href="#cb1-517" tabindex="-1"></a><span class="co">#&gt; 495 IPD_Study Drug_A        1         0   1</span></span>
-<span id="cb1-518"><a href="#cb1-518" tabindex="-1"></a><span class="co">#&gt; 496 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-519"><a href="#cb1-519" tabindex="-1"></a><span class="co">#&gt; 497 IPD_Study Drug_A        0         0   1</span></span>
-<span id="cb1-520"><a href="#cb1-520" tabindex="-1"></a><span class="co">#&gt; 498 IPD_Study Drug_A        0         1   0</span></span>
-<span id="cb1-521"><a href="#cb1-521" tabindex="-1"></a><span class="co">#&gt; 499 IPD_Study Drug_A        1         0   0</span></span>
-<span id="cb1-522"><a href="#cb1-522" tabindex="-1"></a><span class="co">#&gt; 500 IPD_Study Drug_A        0         0   0</span></span>
-<span id="cb1-523"><a href="#cb1-523" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb1-524"><a href="#cb1-524" tabindex="-1"></a><span class="co">#&gt; $n</span></span>
-<span id="cb1-525"><a href="#cb1-525" tabindex="-1"></a><span class="co">#&gt; [1] 500</span></span>
-<span id="cb1-526"><a href="#cb1-526" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb1-527"><a href="#cb1-527" tabindex="-1"></a><span class="co">#&gt; $treatment</span></span>
-<span id="cb1-528"><a href="#cb1-528" tabindex="-1"></a><span class="co">#&gt; [1] &quot;Drug_A&quot;</span></span>
-<span id="cb1-529"><a href="#cb1-529" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb1-530"><a href="#cb1-530" tabindex="-1"></a><span class="co">#&gt; $covariates</span></span>
-<span id="cb1-531"><a href="#cb1-531" tabindex="-1"></a><span class="co">#&gt; [1] &quot;age_group&quot; &quot;sex&quot;      </span></span>
-<span id="cb1-532"><a href="#cb1-532" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb1-533"><a href="#cb1-533" tabindex="-1"></a><span class="co">#&gt; $family</span></span>
-<span id="cb1-534"><a href="#cb1-534" tabindex="-1"></a><span class="co">#&gt; [1] &quot;binomial&quot;</span></span>
-<span id="cb1-535"><a href="#cb1-535" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb1-536"><a href="#cb1-536" tabindex="-1"></a><span class="co">#&gt; $type</span></span>
-<span id="cb1-537"><a href="#cb1-537" tabindex="-1"></a><span class="co">#&gt; [1] &quot;ipd&quot;</span></span>
-<span id="cb1-538"><a href="#cb1-538" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb1-539"><a href="#cb1-539" tabindex="-1"></a><span class="co">#&gt; $n_events</span></span>
-<span id="cb1-540"><a href="#cb1-540" tabindex="-1"></a><span class="co">#&gt; [1] 303</span></span>
-<span id="cb1-541"><a href="#cb1-541" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb1-542"><a href="#cb1-542" tabindex="-1"></a><span class="co">#&gt; attr(,&quot;class&quot;)</span></span>
-<span id="cb1-543"><a href="#cb1-543" tabindex="-1"></a><span class="co">#&gt; [1] &quot;mlumr_ipd&quot; &quot;list&quot;</span></span></code></pre></div>
-<div id="continuous-outcomes" class="section level3">
-<h3>Continuous outcomes</h3>
-<p>For continuous outcomes, use <code>family = &quot;normal&quot;</code>. The IPD
-frame needs a numeric outcome column:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a>trial_a_normal <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
-<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a>  <span class="at">patient_id =</span> <span class="dv">1</span><span class="sc">:</span><span class="dv">500</span>,</span>
-<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a>  <span class="at">treatment =</span> <span class="st">&quot;Drug_A&quot;</span>,</span>
-<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a>  <span class="at">score =</span> <span class="fu">rnorm</span>(<span class="dv">500</span>, <span class="at">mean =</span> <span class="fl">3.0</span>, <span class="at">sd =</span> <span class="fl">1.2</span>),</span>
-<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a>  <span class="at">age_group =</span> <span class="fu">rbinom</span>(<span class="dv">500</span>, <span class="dv">1</span>, <span class="fl">0.4</span>),</span>
-<span id="cb2-6"><a href="#cb2-6" tabindex="-1"></a>  <span class="at">sex =</span> <span class="fu">rbinom</span>(<span class="dv">500</span>, <span class="dv">1</span>, <span class="fl">0.55</span>)</span>
-<span id="cb2-7"><a href="#cb2-7" tabindex="-1"></a>)</span>
-<span id="cb2-8"><a href="#cb2-8" tabindex="-1"></a></span>
-<span id="cb2-9"><a href="#cb2-9" tabindex="-1"></a>ipd_normal <span class="ot">&lt;-</span> <span class="fu">set_ipd</span>(</span>
-<span id="cb2-10"><a href="#cb2-10" tabindex="-1"></a>  <span class="at">data =</span> trial_a_normal,</span>
-<span id="cb2-11"><a href="#cb2-11" tabindex="-1"></a>  <span class="at">treatment =</span> <span class="st">&quot;treatment&quot;</span>,</span>
-<span id="cb2-12"><a href="#cb2-12" tabindex="-1"></a>  <span class="at">outcome =</span> <span class="st">&quot;score&quot;</span>,</span>
-<span id="cb2-13"><a href="#cb2-13" tabindex="-1"></a>  <span class="at">covariates =</span> <span class="fu">c</span>(<span class="st">&quot;age_group&quot;</span>, <span class="st">&quot;sex&quot;</span>),</span>
-<span id="cb2-14"><a href="#cb2-14" tabindex="-1"></a>  <span class="at">family =</span> <span class="st">&quot;normal&quot;</span></span>
-<span id="cb2-15"><a href="#cb2-15" tabindex="-1"></a>)</span></code></pre></div>
+<span id="cb1-19"><a href="#cb1-19" tabindex="-1"></a>agd <span class="ot">&lt;-</span> <span class="fu">set_agd</span>(trial_b, <span class="at">treatment =</span> <span class="st">&quot;treatment&quot;</span>,</span>
+<span id="cb1-20"><a href="#cb1-20" tabindex="-1"></a>               <span class="at">outcome_n =</span> <span class="st">&quot;n_total&quot;</span>, <span class="at">outcome_r =</span> <span class="st">&quot;n_events&quot;</span>,</span>
+<span id="cb1-21"><a href="#cb1-21" tabindex="-1"></a>               <span class="at">cov_means =</span> <span class="fu">c</span>(<span class="st">&quot;age_group_mean&quot;</span>, <span class="st">&quot;sex_prop&quot;</span>),</span>
+<span id="cb1-22"><a href="#cb1-22" tabindex="-1"></a>               <span class="at">cov_types =</span> <span class="fu">c</span>(<span class="st">&quot;binary&quot;</span>, <span class="st">&quot;binary&quot;</span>))</span>
+<span id="cb1-23"><a href="#cb1-23" tabindex="-1"></a></span>
+<span id="cb1-24"><a href="#cb1-24" tabindex="-1"></a>dat <span class="ot">&lt;-</span> <span class="fu">combine_data</span>(ipd, agd)</span>
+<span id="cb1-25"><a href="#cb1-25" tabindex="-1"></a>dat</span>
+<span id="cb1-26"><a href="#cb1-26" tabindex="-1"></a><span class="co">#&gt; Unanchored Comparison Data (Binary)</span></span>
+<span id="cb1-27"><a href="#cb1-27" tabindex="-1"></a><span class="co">#&gt; ====================================</span></span>
+<span id="cb1-28"><a href="#cb1-28" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb1-29"><a href="#cb1-29" tabindex="-1"></a><span class="co">#&gt; Index treatment (IPD): Drug_A </span></span>
+<span id="cb1-30"><a href="#cb1-30" tabindex="-1"></a><span class="co">#&gt;   N = 500 </span></span>
+<span id="cb1-31"><a href="#cb1-31" tabindex="-1"></a><span class="co">#&gt;   Events = 303 (60.6%) </span></span>
+<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb1-33"><a href="#cb1-33" tabindex="-1"></a><span class="co">#&gt; Comparator treatment (AgD): Drug_B </span></span>
+<span id="cb1-34"><a href="#cb1-34" tabindex="-1"></a><span class="co">#&gt;   N = 400 </span></span>
+<span id="cb1-35"><a href="#cb1-35" tabindex="-1"></a><span class="co">#&gt;   Events = 160 (40.0%) </span></span>
+<span id="cb1-36"><a href="#cb1-36" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb1-37"><a href="#cb1-37" tabindex="-1"></a><span class="co">#&gt; Covariates ( 2 ): age_group, sex </span></span>
+<span id="cb1-38"><a href="#cb1-38" tabindex="-1"></a><span class="co">#&gt; Integration points: not yet added (use add_integration())</span></span></code></pre></div>
 </div>
-<div id="count-outcomes" class="section level3">
-<h3>Count outcomes</h3>
-<p>For Poisson count data, use <code>family = &quot;poisson&quot;</code> and
-supply an <code>exposure</code> column:</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a>trial_a_poisson <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
-<span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a>  <span class="at">patient_id =</span> <span class="dv">1</span><span class="sc">:</span><span class="dv">500</span>,</span>
-<span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a>  <span class="at">treatment =</span> <span class="st">&quot;Drug_A&quot;</span>,</span>
-<span id="cb3-4"><a href="#cb3-4" tabindex="-1"></a>  <span class="at">events =</span> <span class="fu">rpois</span>(<span class="dv">500</span>, <span class="at">lambda =</span> <span class="fl">0.8</span>),</span>
-<span id="cb3-5"><a href="#cb3-5" tabindex="-1"></a>  <span class="at">person_years =</span> <span class="fu">runif</span>(<span class="dv">500</span>, <span class="fl">0.5</span>, <span class="fl">2.0</span>),</span>
-<span id="cb3-6"><a href="#cb3-6" tabindex="-1"></a>  <span class="at">age_group =</span> <span class="fu">rbinom</span>(<span class="dv">500</span>, <span class="dv">1</span>, <span class="fl">0.4</span>),</span>
-<span id="cb3-7"><a href="#cb3-7" tabindex="-1"></a>  <span class="at">sex =</span> <span class="fu">rbinom</span>(<span class="dv">500</span>, <span class="dv">1</span>, <span class="fl">0.55</span>)</span>
-<span id="cb3-8"><a href="#cb3-8" tabindex="-1"></a>)</span>
-<span id="cb3-9"><a href="#cb3-9" tabindex="-1"></a></span>
-<span id="cb3-10"><a href="#cb3-10" tabindex="-1"></a>ipd_poisson <span class="ot">&lt;-</span> <span class="fu">set_ipd</span>(</span>
-<span id="cb3-11"><a href="#cb3-11" tabindex="-1"></a>  <span class="at">data =</span> trial_a_poisson,</span>
-<span id="cb3-12"><a href="#cb3-12" tabindex="-1"></a>  <span class="at">treatment =</span> <span class="st">&quot;treatment&quot;</span>,</span>
-<span id="cb3-13"><a href="#cb3-13" tabindex="-1"></a>  <span class="at">outcome =</span> <span class="st">&quot;events&quot;</span>,</span>
-<span id="cb3-14"><a href="#cb3-14" tabindex="-1"></a>  <span class="at">covariates =</span> <span class="fu">c</span>(<span class="st">&quot;age_group&quot;</span>, <span class="st">&quot;sex&quot;</span>),</span>
-<span id="cb3-15"><a href="#cb3-15" tabindex="-1"></a>  <span class="at">family =</span> <span class="st">&quot;poisson&quot;</span>,</span>
-<span id="cb3-16"><a href="#cb3-16" tabindex="-1"></a>  <span class="at">exposure =</span> <span class="st">&quot;person_years&quot;</span></span>
-<span id="cb3-17"><a href="#cb3-17" tabindex="-1"></a>)</span></code></pre></div>
+<div id="outcome-family-input-reference" class="section level2">
+<h2>Outcome-family input reference</h2>
+<p>The outcome arguments differ by family; everything else (covariates,
+combining, integration) is identical. Each family has a complete worked
+example.</p>
+<table>
+<colgroup>
+<col width="11%" />
+<col width="37%" />
+<col width="37%" />
+<col width="14%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Family</th>
+<th><code>set_ipd()</code> outcome args</th>
+<th><code>set_agd()</code> outcome args</th>
+<th>Vignette</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>binomial</td>
+<td><code>outcome</code> (0/1)</td>
+<td><code>outcome_n</code>, <code>outcome_r</code></td>
+<td><code>vignette(&quot;binary-outcomes&quot;)</code></td>
+</tr>
+<tr class="even">
+<td>normal</td>
+<td><code>outcome</code>, <code>family = &quot;normal&quot;</code></td>
+<td><code>outcome_mean</code>, <code>outcome_se</code> (+
+<code>outcome_n</code>)</td>
+<td><code>vignette(&quot;continuous-outcomes&quot;)</code></td>
+</tr>
+<tr class="odd">
+<td>poisson</td>
+<td><code>outcome</code>, <code>exposure</code>,
+<code>family = &quot;poisson&quot;</code></td>
+<td><code>outcome_r</code>, <code>outcome_E</code></td>
+<td><code>vignette(&quot;count-outcomes&quot;)</code></td>
+</tr>
+<tr class="even">
+<td>survival</td>
+<td><code>Surv</code>/<code>time</code>/<code>status</code>,
+<code>family = &quot;survival&quot;</code></td>
+<td><code>set_agd_surv()</code>: pseudo-IPD
+<code>time</code>/<code>status</code></td>
+<td><code>vignette(&quot;survival-outcomes&quot;)</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>set_ipd()</code> validates that the outcome matches the family
+(binary 0/1; numeric for normal; non-negative integer counts for
+Poisson; positive times for survival) and drops rows with missing values
+(with a warning).</p>
+<div id="covariate-naming-and-types" class="section level3">
+<h3>Covariate naming and types</h3>
+<p><code>set_agd()</code> strips <code>_mean</code> and
+<code>_prop</code> suffixes so AgD covariate names match the IPD
+(<code>age_group_mean</code> → <code>age_group</code>,
+<code>sex_prop</code> → <code>sex</code>). Declare each covariate as
+<code>&quot;binary&quot;</code> or <code>&quot;continuous&quot;</code> via
+<code>cov_types</code>; continuous covariates also need a
+standard-deviation column in <code>cov_sds</code>.</p>
 </div>
-<div id="validation" class="section level3">
-<h3>Validation</h3>
-<p><code>set_ipd()</code> checks that:</p>
+<div id="scale-conventions-for-aggregate-summaries" class="section level3">
+<h3>Scale conventions for aggregate summaries</h3>
+<p>For the <strong>normal</strong> family, <code>outcome_mean</code> and
+<code>outcome_se</code> must be on the <strong>original (arithmetic)
+scale</strong>, the same scale as the IPD outcome, even when fitting
+with <code>link = &quot;log&quot;</code>. A geometric mean will not do, and its
+units are what makes that easy to miss: it is in the original units and
+is still a different quantity. Exponentiating a log-scale mean gives the
+geometric mean, not the arithmetic one, and for a lognormal outcome with
+log-scale SD 1 the geometric mean is 39% below the arithmetic one, which
+is the same gap seen from the other side as the arithmetic mean being
+65% above it. Propagating the standard error does not repair that,
+because the mismatch is in the estimand rather than in its uncertainty.
+Ask for the arithmetic mean and its SE. See
+<code>vignette(&quot;continuous-outcomes&quot;)</code>.</p>
+</div>
+</div>
+<div id="integration-points" class="section level2">
+<h2>Integration points</h2>
+<p>ML-UMR adjusts for covariate imbalance by integrating the IPD-derived
+outcome model over the comparator population’s covariate distribution.
+mlumr represents that distribution by <strong>Sobol quasi-Monte Carlo
+(QMC)</strong> integration points, correlated with a <strong>Gaussian
+copula</strong> so the joint covariate structure is respected.</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a>dat <span class="ot">&lt;-</span> <span class="fu">add_integration</span>(</span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a>  dat,</span>
+<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a>  <span class="at">n_int =</span> <span class="dv">64</span>,</span>
+<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a>  <span class="at">age_group =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> age_group_mean),</span>
+<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a>  <span class="at">sex =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> sex_mean)</span>
+<span id="cb2-6"><a href="#cb2-6" tabindex="-1"></a>)</span></code></pre></div>
 <ul>
-<li>All specified columns exist in the data</li>
-<li>The outcome matches the family (binary for binomial, numeric for
-normal, non-negative integers for Poisson)</li>
-<li>Missing values are handled (rows dropped with a warning)</li>
+<li><strong><code>n_int</code></strong>, number of points (powers of 2:
+32, 64, 128, …). More points give better accuracy at the cost of slower
+fitting; check adequacy with <code>check_integration()</code>
+(below).</li>
+<li><strong><code>distr()</code></strong>, wraps a quantile function
+whose parameters reference AgD summary columns. Use <code>qbern</code>
+(Bernoulli, supplied by mlumr) for binary covariates, <code>qnorm</code>
+for normal, <code>qgamma</code> for skewed positive covariates, and
+<code>qlogitnorm</code> for a covariate reported as a proportion on
+<code>(0, 1)</code>.</li>
 </ul>
-<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a><span class="co"># This will error: non-binary outcome with binomial family</span></span>
-<span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a>bad_data <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="at">trt =</span> <span class="st">&quot;A&quot;</span>, <span class="at">outcome =</span> <span class="fu">c</span>(<span class="dv">0</span>, <span class="dv">1</span>, <span class="dv">2</span>), <span class="at">x =</span> <span class="fu">rnorm</span>(<span class="dv">3</span>))</span>
-<span id="cb4-3"><a href="#cb4-3" tabindex="-1"></a><span class="fu">set_ipd</span>(bad_data, <span class="st">&quot;trt&quot;</span>, <span class="st">&quot;outcome&quot;</span>, <span class="st">&quot;x&quot;</span>)</span>
-<span id="cb4-4"><a href="#cb4-4" tabindex="-1"></a><span class="co">#&gt; Error:</span></span>
-<span id="cb4-5"><a href="#cb4-5" tabindex="-1"></a><span class="co">#&gt; ! `outcome` must be binary (0/1) for binomial family</span></span></code></pre></div>
-</div>
-</div>
-<div id="setting-up-agd" class="section level2">
-<h2>Setting up AgD</h2>
-<p>AgD should be a data frame with one row per study/subgroup,
-containing:</p>
-<ul>
-<li>Treatment indicator</li>
-<li>Outcome summaries (depend on <code>family</code>):
-<ul>
-<li><strong>Binomial</strong>: sample size (<code>outcome_n</code>) and
-number of events (<code>outcome_r</code>)</li>
-<li><strong>Normal</strong>: mean outcome (<code>outcome_mean</code>)
-and standard error (<code>outcome_se</code>), optionally sample size
-(<code>outcome_n</code>)</li>
-<li><strong>Poisson</strong>: number of events (<code>outcome_r</code>)
-and total exposure (<code>outcome_E</code>)</li>
-</ul></li>
-<li>Covariate means/proportions</li>
-</ul>
-<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a><span class="co"># Example: Trial B data (comparator treatment)</span></span>
-<span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a>trial_b <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
-<span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a>  <span class="at">study =</span> <span class="st">&quot;Trial_B&quot;</span>,</span>
-<span id="cb5-4"><a href="#cb5-4" tabindex="-1"></a>  <span class="at">treatment =</span> <span class="st">&quot;Drug_B&quot;</span>,</span>
-<span id="cb5-5"><a href="#cb5-5" tabindex="-1"></a>  <span class="at">n_total =</span> <span class="dv">400</span>,</span>
-<span id="cb5-6"><a href="#cb5-6" tabindex="-1"></a>  <span class="at">n_events =</span> <span class="dv">160</span>,</span>
-<span id="cb5-7"><a href="#cb5-7" tabindex="-1"></a>  <span class="at">age_group_mean =</span> <span class="fl">0.35</span>,   <span class="co"># proportion in &quot;old&quot; group</span></span>
-<span id="cb5-8"><a href="#cb5-8" tabindex="-1"></a>  <span class="at">sex_prop =</span> <span class="fl">0.50</span>           <span class="co"># proportion female</span></span>
-<span id="cb5-9"><a href="#cb5-9" tabindex="-1"></a>)</span>
-<span id="cb5-10"><a href="#cb5-10" tabindex="-1"></a></span>
-<span id="cb5-11"><a href="#cb5-11" tabindex="-1"></a>agd <span class="ot">&lt;-</span> <span class="fu">set_agd</span>(</span>
-<span id="cb5-12"><a href="#cb5-12" tabindex="-1"></a>  <span class="at">data =</span> trial_b,</span>
-<span id="cb5-13"><a href="#cb5-13" tabindex="-1"></a>  <span class="at">treatment =</span> <span class="st">&quot;treatment&quot;</span>,</span>
-<span id="cb5-14"><a href="#cb5-14" tabindex="-1"></a>  <span class="at">outcome_n =</span> <span class="st">&quot;n_total&quot;</span>,</span>
-<span id="cb5-15"><a href="#cb5-15" tabindex="-1"></a>  <span class="at">outcome_r =</span> <span class="st">&quot;n_events&quot;</span>,</span>
-<span id="cb5-16"><a href="#cb5-16" tabindex="-1"></a>  <span class="at">cov_means =</span> <span class="fu">c</span>(<span class="st">&quot;age_group_mean&quot;</span>, <span class="st">&quot;sex_prop&quot;</span>),</span>
-<span id="cb5-17"><a href="#cb5-17" tabindex="-1"></a>  <span class="at">cov_types =</span> <span class="fu">c</span>(<span class="st">&quot;binary&quot;</span>, <span class="st">&quot;binary&quot;</span>)</span>
-<span id="cb5-18"><a href="#cb5-18" tabindex="-1"></a>)</span></code></pre></div>
-<div id="agd-for-continuous-outcomes" class="section level3">
-<h3>AgD for continuous outcomes</h3>
-<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a>agd_normal <span class="ot">&lt;-</span> <span class="fu">set_agd</span>(</span>
-<span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a>  <span class="at">data =</span> <span class="fu">data.frame</span>(</span>
-<span id="cb6-3"><a href="#cb6-3" tabindex="-1"></a>    <span class="at">trt =</span> <span class="st">&quot;Drug_B&quot;</span>, <span class="at">y_mean =</span> <span class="fl">3.2</span>, <span class="at">se =</span> <span class="fl">0.15</span>, <span class="at">n =</span> <span class="dv">400</span>,</span>
-<span id="cb6-4"><a href="#cb6-4" tabindex="-1"></a>    <span class="at">age_group_mean =</span> <span class="fl">0.35</span>, <span class="at">sex_prop =</span> <span class="fl">0.50</span></span>
-<span id="cb6-5"><a href="#cb6-5" tabindex="-1"></a>  ),</span>
-<span id="cb6-6"><a href="#cb6-6" tabindex="-1"></a>  <span class="at">treatment =</span> <span class="st">&quot;trt&quot;</span>,</span>
-<span id="cb6-7"><a href="#cb6-7" tabindex="-1"></a>  <span class="at">family =</span> <span class="st">&quot;normal&quot;</span>,</span>
-<span id="cb6-8"><a href="#cb6-8" tabindex="-1"></a>  <span class="at">outcome_mean =</span> <span class="st">&quot;y_mean&quot;</span>,</span>
-<span id="cb6-9"><a href="#cb6-9" tabindex="-1"></a>  <span class="at">outcome_se =</span> <span class="st">&quot;se&quot;</span>,</span>
-<span id="cb6-10"><a href="#cb6-10" tabindex="-1"></a>  <span class="at">outcome_n =</span> <span class="st">&quot;n&quot;</span>,</span>
-<span id="cb6-11"><a href="#cb6-11" tabindex="-1"></a>  <span class="at">cov_means =</span> <span class="fu">c</span>(<span class="st">&quot;age_group_mean&quot;</span>, <span class="st">&quot;sex_prop&quot;</span>),</span>
-<span id="cb6-12"><a href="#cb6-12" tabindex="-1"></a>  <span class="at">cov_types =</span> <span class="fu">c</span>(<span class="st">&quot;binary&quot;</span>, <span class="st">&quot;binary&quot;</span>)</span>
-<span id="cb6-13"><a href="#cb6-13" tabindex="-1"></a>)</span></code></pre></div>
-<p><strong>Scale requirement for normal outcomes.</strong>
-<code>set_agd()</code> assumes the AgD mean (<code>outcome_mean</code>)
-and SE (<code>outcome_se</code>) are on the <strong>arithmetic
-(original, untransformed) scale</strong>, regardless of whether
-<code>mlumr()</code> is later called with <code>link = &quot;identity&quot;</code>
-or <code>link = &quot;log&quot;</code>. If a publication reports only a log-scale
-mean and SD, or a geometric mean, back-transform before calling
-<code>set_agd()</code> and propagate uncertainty via the delta method;
-passing log-scale summaries silently biases the posterior because the
-Stan likelihood is <code>normal(E[exp(eta)], se_agd)</code> under the
-log link, expecting the AgD quantities already on the outcome scale.</p>
-</div>
-<div id="agd-for-count-outcomes" class="section level3">
-<h3>AgD for count outcomes</h3>
-<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a>agd_poisson <span class="ot">&lt;-</span> <span class="fu">set_agd</span>(</span>
-<span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a>  <span class="at">data =</span> <span class="fu">data.frame</span>(</span>
-<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a>    <span class="at">trt =</span> <span class="st">&quot;Drug_B&quot;</span>, <span class="at">n_events =</span> <span class="dv">120</span>, <span class="at">person_years =</span> <span class="dv">800</span>,</span>
-<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a>    <span class="at">age_group_mean =</span> <span class="fl">0.35</span>, <span class="at">sex_prop =</span> <span class="fl">0.50</span></span>
-<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a>  ),</span>
-<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a>  <span class="at">treatment =</span> <span class="st">&quot;trt&quot;</span>,</span>
-<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a>  <span class="at">family =</span> <span class="st">&quot;poisson&quot;</span>,</span>
-<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a>  <span class="at">outcome_r =</span> <span class="st">&quot;n_events&quot;</span>,</span>
-<span id="cb7-9"><a href="#cb7-9" tabindex="-1"></a>  <span class="at">outcome_E =</span> <span class="st">&quot;person_years&quot;</span>,</span>
-<span id="cb7-10"><a href="#cb7-10" tabindex="-1"></a>  <span class="at">cov_means =</span> <span class="fu">c</span>(<span class="st">&quot;age_group_mean&quot;</span>, <span class="st">&quot;sex_prop&quot;</span>),</span>
-<span id="cb7-11"><a href="#cb7-11" tabindex="-1"></a>  <span class="at">cov_types =</span> <span class="fu">c</span>(<span class="st">&quot;binary&quot;</span>, <span class="st">&quot;binary&quot;</span>)</span>
-<span id="cb7-12"><a href="#cb7-12" tabindex="-1"></a>)</span></code></pre></div>
-</div>
-<div id="covariate-naming" class="section level3">
-<h3>Covariate naming</h3>
-<p><code>set_agd()</code> automatically strips <code>_mean</code> and
-<code>_prop</code> suffixes from covariate names to match the IPD
-covariate names:</p>
-<ul>
-<li><code>&quot;age_group_mean&quot;</code> -&gt; covariate name
-<code>&quot;age_group&quot;</code></li>
-<li><code>&quot;sex_prop&quot;</code> -&gt; covariate name <code>&quot;sex&quot;</code></li>
-</ul>
-<p>Make sure the resulting names match those in your IPD.</p>
-</div>
-<div id="continuous-covariates" class="section level3">
-<h3>Continuous covariates</h3>
-<p>For continuous covariates, also supply standard deviations:</p>
-<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a>agd_continuous <span class="ot">&lt;-</span> <span class="fu">set_agd</span>(</span>
-<span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a>  <span class="at">data =</span> <span class="fu">data.frame</span>(</span>
-<span id="cb8-3"><a href="#cb8-3" tabindex="-1"></a>    <span class="at">trt =</span> <span class="st">&quot;B&quot;</span>, <span class="at">n_total =</span> <span class="dv">400</span>, <span class="at">n_events =</span> <span class="dv">160</span>,</span>
-<span id="cb8-4"><a href="#cb8-4" tabindex="-1"></a>    <span class="at">bmi_mean =</span> <span class="fl">25.3</span>, <span class="at">bmi_sd =</span> <span class="fl">4.2</span></span>
-<span id="cb8-5"><a href="#cb8-5" tabindex="-1"></a>  ),</span>
-<span id="cb8-6"><a href="#cb8-6" tabindex="-1"></a>  <span class="at">treatment =</span> <span class="st">&quot;trt&quot;</span>,</span>
-<span id="cb8-7"><a href="#cb8-7" tabindex="-1"></a>  <span class="at">outcome_n =</span> <span class="st">&quot;n_total&quot;</span>,</span>
-<span id="cb8-8"><a href="#cb8-8" tabindex="-1"></a>  <span class="at">outcome_r =</span> <span class="st">&quot;n_events&quot;</span>,</span>
-<span id="cb8-9"><a href="#cb8-9" tabindex="-1"></a>  <span class="at">cov_means =</span> <span class="st">&quot;bmi_mean&quot;</span>,</span>
-<span id="cb8-10"><a href="#cb8-10" tabindex="-1"></a>  <span class="at">cov_sds =</span> <span class="st">&quot;bmi_sd&quot;</span>,</span>
-<span id="cb8-11"><a href="#cb8-11" tabindex="-1"></a>  <span class="at">cov_types =</span> <span class="st">&quot;continuous&quot;</span></span>
-<span id="cb8-12"><a href="#cb8-12" tabindex="-1"></a>)</span></code></pre></div>
-</div>
-</div>
-<div id="combining-data" class="section level2">
-<h2>Combining data</h2>
-<div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a>dat <span class="ot">&lt;-</span> <span class="fu">combine_data</span>(ipd, agd)</span>
-<span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a><span class="fu">print</span>(dat)</span>
-<span id="cb9-3"><a href="#cb9-3" tabindex="-1"></a><span class="co">#&gt; Unanchored Comparison Data (Binary)</span></span>
-<span id="cb9-4"><a href="#cb9-4" tabindex="-1"></a><span class="co">#&gt; ====================================</span></span>
-<span id="cb9-5"><a href="#cb9-5" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb9-6"><a href="#cb9-6" tabindex="-1"></a><span class="co">#&gt; Index treatment (IPD): Drug_A </span></span>
-<span id="cb9-7"><a href="#cb9-7" tabindex="-1"></a><span class="co">#&gt;   N = 500 </span></span>
-<span id="cb9-8"><a href="#cb9-8" tabindex="-1"></a><span class="co">#&gt;   Events = 303 (60.6%) </span></span>
-<span id="cb9-9"><a href="#cb9-9" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb9-10"><a href="#cb9-10" tabindex="-1"></a><span class="co">#&gt; Comparator treatment (AgD): Drug_B </span></span>
-<span id="cb9-11"><a href="#cb9-11" tabindex="-1"></a><span class="co">#&gt;   N = 400 </span></span>
-<span id="cb9-12"><a href="#cb9-12" tabindex="-1"></a><span class="co">#&gt;   Events = 160 (40.0%) </span></span>
-<span id="cb9-13"><a href="#cb9-13" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb9-14"><a href="#cb9-14" tabindex="-1"></a><span class="co">#&gt; Covariates ( 2 ): age_group, sex </span></span>
-<span id="cb9-15"><a href="#cb9-15" tabindex="-1"></a><span class="co">#&gt; Integration points: not yet added (use add_integration())</span></span></code></pre></div>
-</div>
-<div id="adding-integration-points" class="section level2">
-<h2>Adding integration points</h2>
-<p>Integration points are needed for ML-UMR’s numerical integration over
-the comparator population’s covariate distribution. They are generated
-using Sobol quasi-Monte Carlo sequences with a Gaussian copula to
-respect covariate correlations.</p>
-<div id="basic-usage" class="section level3">
-<h3>Basic usage</h3>
-<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a>dat <span class="ot">&lt;-</span> <span class="fu">add_integration</span>(</span>
-<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a>  dat,</span>
-<span id="cb10-3"><a href="#cb10-3" tabindex="-1"></a>  <span class="at">n_int =</span> <span class="dv">64</span>,</span>
-<span id="cb10-4"><a href="#cb10-4" tabindex="-1"></a>  <span class="at">age_group =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> age_group_mean),</span>
-<span id="cb10-5"><a href="#cb10-5" tabindex="-1"></a>  <span class="at">sex =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> sex_mean)</span>
-<span id="cb10-6"><a href="#cb10-6" tabindex="-1"></a>)</span></code></pre></div>
-<p>Key points:</p>
-<ul>
-<li><strong><code>n_int</code></strong>: Number of integration points
-(powers of 2 recommended: 32, 64, 128, 256). More points = better
-accuracy but slower Stan fitting.</li>
-<li><strong><code>distr()</code></strong>: Wraps a quantile function
-with parameters. Parameters can reference columns in the AgD data (e.g.,
-<code>age_group_mean</code>).</li>
-<li><strong><code>qbern</code></strong>: Bernoulli quantile function
-(provided by mlumr) for binary covariates. Use <code>qnorm</code> for
-continuous covariates.</li>
-</ul>
-</div>
-<div id="distribution-types" class="section level3">
-<h3>Distribution types</h3>
-<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a><span class="co"># Binary covariate</span></span>
-<span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a>age <span class="ot">=</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> age_mean)</span>
-<span id="cb11-3"><a href="#cb11-3" tabindex="-1"></a></span>
-<span id="cb11-4"><a href="#cb11-4" tabindex="-1"></a><span class="co"># Continuous covariate (normal)</span></span>
-<span id="cb11-5"><a href="#cb11-5" tabindex="-1"></a>bmi <span class="ot">=</span> <span class="fu">distr</span>(qnorm, <span class="at">mean =</span> bmi_mean, <span class="at">sd =</span> bmi_sd)</span>
-<span id="cb11-6"><a href="#cb11-6" tabindex="-1"></a></span>
-<span id="cb11-7"><a href="#cb11-7" tabindex="-1"></a><span class="co"># Continuous covariate (gamma)</span></span>
-<span id="cb11-8"><a href="#cb11-8" tabindex="-1"></a>biomarker <span class="ot">=</span> <span class="fu">distr</span>(qgamma, <span class="at">shape =</span> <span class="dv">2</span>, <span class="at">rate =</span> <span class="fl">0.5</span>)</span></code></pre></div>
-</div>
+<p>mlumr’s <code>qgamma()</code> and <code>qlogitnorm()</code> accept a
+<code>mean</code> and <code>sd</code> on the natural scale in place of
+their native parameters, so the moments can be taken from a published
+baseline table without conversion. Both must be supplied together. A
+logit-normal additionally requires
+<code>sd^2 &lt; mean * (1 - mean)</code>, the bound any variable on
+<code>(0, 1)</code> satisfies; a percentage must be rescaled to a
+proportion first.</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a><span class="fu">add_integration</span>(</span>
+<span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a>  dat, <span class="at">n_int =</span> <span class="dv">64</span>,</span>
+<span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a>  <span class="at">age =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> age_mean),                  <span class="co"># binary</span></span>
+<span id="cb3-4"><a href="#cb3-4" tabindex="-1"></a>  <span class="at">bmi =</span> <span class="fu">distr</span>(qnorm, <span class="at">mean =</span> bmi_mean, <span class="at">sd =</span> bmi_sd),     <span class="co"># continuous (normal)</span></span>
+<span id="cb3-5"><a href="#cb3-5" tabindex="-1"></a>  <span class="at">biomarker =</span> <span class="fu">distr</span>(qgamma, <span class="at">mean =</span> bio_mean, <span class="at">sd =</span> bio_sd),  <span class="co"># right-skewed</span></span>
+<span id="cb3-6"><a href="#cb3-6" tabindex="-1"></a>  <span class="at">bsa =</span> <span class="fu">distr</span>(qlogitnorm, <span class="at">mean =</span> bsa_mean, <span class="at">sd =</span> bsa_sd)     <span class="co"># proportion on (0, 1)</span></span>
+<span id="cb3-7"><a href="#cb3-7" tabindex="-1"></a>)</span></code></pre></div>
 <div id="correlation-handling" class="section level3">
 <h3>Correlation handling</h3>
-<p>By default, correlations between covariates are estimated from the
-IPD using Spearman rank correlation, then adjusted for the Gaussian
-copula. For binary and mixed discrete/continuous covariate pairs, this
-adjustment is a pragmatic approximation — exact calibration of the
-latent Gaussian correlation depends on marginal prevalences, which are
-not used in the current transform. For most practical datasets this
-provides adequate integration-point distributions, but users with strong
-prior information on covariate correlations can supply their own matrix
-via the <code>cor</code> argument.</p>
-<div class="sourceCode" id="cb12"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" tabindex="-1"></a><span class="co"># Default: Spearman correlation from IPD</span></span>
-<span id="cb12-2"><a href="#cb12-2" tabindex="-1"></a>dat <span class="ot">&lt;-</span> <span class="fu">add_integration</span>(dat, <span class="at">n_int =</span> <span class="dv">64</span>,</span>
-<span id="cb12-3"><a href="#cb12-3" tabindex="-1"></a>                       <span class="at">age_group =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> age_group_mean),</span>
-<span id="cb12-4"><a href="#cb12-4" tabindex="-1"></a>                       <span class="at">sex =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> sex_mean))</span>
-<span id="cb12-5"><a href="#cb12-5" tabindex="-1"></a></span>
-<span id="cb12-6"><a href="#cb12-6" tabindex="-1"></a><span class="co"># Supply your own correlation matrix</span></span>
-<span id="cb12-7"><a href="#cb12-7" tabindex="-1"></a>my_cor <span class="ot">&lt;-</span> <span class="fu">matrix</span>(<span class="fu">c</span>(<span class="dv">1</span>, <span class="fl">0.3</span>, <span class="fl">0.3</span>, <span class="dv">1</span>), <span class="dv">2</span>, <span class="dv">2</span>)</span>
-<span id="cb12-8"><a href="#cb12-8" tabindex="-1"></a>dat <span class="ot">&lt;-</span> <span class="fu">add_integration</span>(dat, <span class="at">n_int =</span> <span class="dv">64</span>, <span class="at">cor =</span> my_cor,</span>
-<span id="cb12-9"><a href="#cb12-9" tabindex="-1"></a>                       <span class="at">age_group =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> age_group_mean),</span>
-<span id="cb12-10"><a href="#cb12-10" tabindex="-1"></a>                       <span class="at">sex =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> sex_mean))</span>
-<span id="cb12-11"><a href="#cb12-11" tabindex="-1"></a></span>
-<span id="cb12-12"><a href="#cb12-12" tabindex="-1"></a><span class="co"># No correlation adjustment</span></span>
-<span id="cb12-13"><a href="#cb12-13" tabindex="-1"></a>dat <span class="ot">&lt;-</span> <span class="fu">add_integration</span>(dat, <span class="at">n_int =</span> <span class="dv">64</span>, <span class="at">cor_adjust =</span> <span class="st">&quot;none&quot;</span>,</span>
-<span id="cb12-14"><a href="#cb12-14" tabindex="-1"></a>                       <span class="at">age_group =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> age_group_mean),</span>
-<span id="cb12-15"><a href="#cb12-15" tabindex="-1"></a>                       <span class="at">sex =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> sex_mean))</span></code></pre></div>
+<p>By default the covariate correlation is estimated from the IPD
+(Spearman) and adjusted for the Gaussian copula. For binary and mixed
+discrete/continuous pairs this copula adjustment is a <strong>pragmatic
+approximation</strong>: the exact latent Gaussian correlation depends on
+the marginal prevalences, which the current transform does not use. It
+is adequate for most datasets, but if you have strong prior information,
+or covariates with prevalences near 0/1, strong correlations, or many
+covariates, supply your own matrix via <code>cor</code> and confirm the
+result is stable with <code>check_integration()</code>.</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a>my_cor <span class="ot">&lt;-</span> <span class="fu">matrix</span>(<span class="fu">c</span>(<span class="dv">1</span>, <span class="fl">0.3</span>, <span class="fl">0.3</span>, <span class="dv">1</span>), <span class="dv">2</span>, <span class="dv">2</span>)</span>
+<span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a><span class="fu">add_integration</span>(dat, <span class="at">n_int =</span> <span class="dv">64</span>, <span class="at">cor =</span> my_cor,</span>
+<span id="cb4-3"><a href="#cb4-3" tabindex="-1"></a>                <span class="at">age_group =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> age_group_mean),</span>
+<span id="cb4-4"><a href="#cb4-4" tabindex="-1"></a>                <span class="at">sex =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> sex_mean))</span>
+<span id="cb4-5"><a href="#cb4-5" tabindex="-1"></a></span>
+<span id="cb4-6"><a href="#cb4-6" tabindex="-1"></a><span class="fu">add_integration</span>(dat, <span class="at">n_int =</span> <span class="dv">64</span>, <span class="at">cor_adjust =</span> <span class="st">&quot;none&quot;</span>,  <span class="co"># no adjustment</span></span>
+<span id="cb4-7"><a href="#cb4-7" tabindex="-1"></a>                <span class="at">age_group =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> age_group_mean),</span>
+<span id="cb4-8"><a href="#cb4-8" tabindex="-1"></a>                <span class="at">sex =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> sex_mean))</span></code></pre></div>
 </div>
-<div id="inspecting-integration-points" class="section level3">
-<h3>Inspecting integration points</h3>
-<div class="sourceCode" id="cb13"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a><span class="co"># Expand to long format</span></span>
-<span id="cb13-2"><a href="#cb13-2" tabindex="-1"></a>int_df <span class="ot">&lt;-</span> <span class="fu">unnest_integration</span>(dat)</span>
-<span id="cb13-3"><a href="#cb13-3" tabindex="-1"></a><span class="fu">head</span>(int_df)</span>
-<span id="cb13-4"><a href="#cb13-4" tabindex="-1"></a><span class="co">#&gt;   age_group sex .int_id .agd_row</span></span>
-<span id="cb13-5"><a href="#cb13-5" tabindex="-1"></a><span class="co">#&gt; 1         0   0       1        1</span></span>
-<span id="cb13-6"><a href="#cb13-6" tabindex="-1"></a><span class="co">#&gt; 2         1   0       2        1</span></span>
-<span id="cb13-7"><a href="#cb13-7" tabindex="-1"></a><span class="co">#&gt; 3         0   1       3        1</span></span>
-<span id="cb13-8"><a href="#cb13-8" tabindex="-1"></a><span class="co">#&gt; 4         0   0       4        1</span></span>
-<span id="cb13-9"><a href="#cb13-9" tabindex="-1"></a><span class="co">#&gt; 5         1   1       5        1</span></span>
-<span id="cb13-10"><a href="#cb13-10" tabindex="-1"></a><span class="co">#&gt; 6         0   0       6        1</span></span></code></pre></div>
-<p>Use <code>check_integration()</code> to compare the generated
-integration points against the requested AgD marginal distributions and
-correlation structure:</p>
-<div class="sourceCode" id="cb14"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" tabindex="-1"></a><span class="fu">check_integration</span>(</span>
-<span id="cb14-2"><a href="#cb14-2" tabindex="-1"></a>  dat,</span>
-<span id="cb14-3"><a href="#cb14-3" tabindex="-1"></a>  <span class="at">age_group =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> age_group_mean),</span>
-<span id="cb14-4"><a href="#cb14-4" tabindex="-1"></a>  <span class="at">sex =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> sex_mean)</span>
-<span id="cb14-5"><a href="#cb14-5" tabindex="-1"></a>)</span>
-<span id="cb14-6"><a href="#cb14-6" tabindex="-1"></a><span class="co">#&gt; Integration check: n_int = 64 vs 128</span></span>
-<span id="cb14-7"><a href="#cb14-7" tabindex="-1"></a><span class="co">#&gt; Marginals -- max relative difference: 0.0159</span></span>
-<span id="cb14-8"><a href="#cb14-8" tabindex="-1"></a><span class="co">#&gt; </span><span class="al">CAUTION</span><span class="co">: 1-5%% marginal relative difference. Consider increasing n_int.</span></span>
-<span id="cb14-9"><a href="#cb14-9" tabindex="-1"></a><span class="co">#&gt; Joint -- max |cor(current) - cor(doubled)|: 0.0113</span></span>
-<span id="cb14-10"><a href="#cb14-10" tabindex="-1"></a><span class="co">#&gt; OK joint: pairwise correlations agree within 0.05.</span></span></code></pre></div>
-<p>This is especially important when there are several covariates,
-strong correlations, binary covariates with prevalences near 0 or 1, or
-a small number of integration points.</p>
+<div id="inspecting-the-integration-points" class="section level3">
+<h3>Inspecting the integration points</h3>
+<p><code>unnest_integration()</code> expands the stored points to a data
+frame with one row per aggregate row and integration point, one column
+per covariate, plus <code>.int_id</code> and <code>.agd_row</code>, so
+you can inspect or plot the realized comparator distribution
+directly:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a><span class="fu">head</span>(<span class="fu">unnest_integration</span>(dat))     <span class="co"># one row per point, covariates in columns</span></span>
+<span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a><span class="co">#&gt;   age_group sex .int_id .agd_row</span></span>
+<span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a><span class="co">#&gt; 1         0   0       1        1</span></span>
+<span id="cb5-4"><a href="#cb5-4" tabindex="-1"></a><span class="co">#&gt; 2         1   0       2        1</span></span>
+<span id="cb5-5"><a href="#cb5-5" tabindex="-1"></a><span class="co">#&gt; 3         0   1       3        1</span></span>
+<span id="cb5-6"><a href="#cb5-6" tabindex="-1"></a><span class="co">#&gt; 4         0   0       4        1</span></span>
+<span id="cb5-7"><a href="#cb5-7" tabindex="-1"></a><span class="co">#&gt; 5         1   1       5        1</span></span>
+<span id="cb5-8"><a href="#cb5-8" tabindex="-1"></a><span class="co">#&gt; 6         0   0       6        1</span></span></code></pre></div>
+<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a><span class="fu">check_integration</span>(</span>
+<span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a>  dat,</span>
+<span id="cb6-3"><a href="#cb6-3" tabindex="-1"></a>  <span class="at">age_group =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> age_group_mean),</span>
+<span id="cb6-4"><a href="#cb6-4" tabindex="-1"></a>  <span class="at">sex =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> sex_mean)</span>
+<span id="cb6-5"><a href="#cb6-5" tabindex="-1"></a>)</span>
+<span id="cb6-6"><a href="#cb6-6" tabindex="-1"></a><span class="co">#&gt; Integration check: n_int = 64 vs 128</span></span>
+<span id="cb6-7"><a href="#cb6-7" tabindex="-1"></a><span class="co">#&gt; Resolution heuristic, max relative difference: 0.0079</span></span>
+<span id="cb6-8"><a href="#cb6-8" tabindex="-1"></a><span class="co">#&gt; Resolution stable within the package&#39;s 1% heuristic.</span></span>
+<span id="cb6-9"><a href="#cb6-9" tabindex="-1"></a><span class="co">#&gt; Declared-target fidelity, max relative difference: 0.0156</span></span>
+<span id="cb6-10"><a href="#cb6-10" tabindex="-1"></a><span class="co">#&gt; Caution: grid moments differ from declared AgD moments by 1-5%.</span></span>
+<span id="cb6-11"><a href="#cb6-11" tabindex="-1"></a><span class="co">#&gt; Joint: max |cor(current) - cor(doubled)|: 0.0113</span></span>
+<span id="cb6-12"><a href="#cb6-12" tabindex="-1"></a><span class="co">#&gt; Joint resolution stable within the package&#39;s 0.05 heuristic.</span></span>
+<span id="cb6-13"><a href="#cb6-13" tabindex="-1"></a><span class="co">#&gt; Target (spearman): max |cor(doubled) - cor_target|: 0.0196</span></span></code></pre></div>
+<p><code>check_integration()</code> compares the realized integration
+points against the requested marginals and correlations and flags when
+<code>n_int</code> is too small, run it whenever there are several or
+strongly correlated covariates.</p>
+</div>
+<div id="visualizing-the-integration-points" class="section level3">
+<h3>Visualizing the integration points</h3>
+<p>For a continuous covariate the quasi-Monte Carlo points should
+reproduce the requested marginal. Here we build a small example with a
+continuous <code>age</code> and overlay the integration points on the
+requested Normal density:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">2026</span>)</span>
+<span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a>ipd_c <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="at">treatment =</span> <span class="st">&quot;Drug_A&quot;</span>, <span class="at">response =</span> <span class="fu">rbinom</span>(<span class="dv">400</span>, <span class="dv">1</span>, <span class="fl">0.5</span>),</span>
+<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a>                    <span class="at">age =</span> <span class="fu">rnorm</span>(<span class="dv">400</span>, <span class="dv">55</span>, <span class="dv">10</span>))</span>
+<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a>agd_c <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="at">treatment =</span> <span class="st">&quot;Drug_B&quot;</span>, <span class="at">n_total =</span> <span class="dv">300</span>, <span class="at">n_events =</span> <span class="dv">120</span>,</span>
+<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a>                    <span class="at">age_mean =</span> <span class="dv">60</span>, <span class="at">age_sd =</span> <span class="dv">9</span>)</span>
+<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a>dat_c <span class="ot">&lt;-</span> <span class="fu">combine_data</span>(</span>
+<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a>  <span class="fu">set_ipd</span>(ipd_c, <span class="at">treatment =</span> <span class="st">&quot;treatment&quot;</span>, <span class="at">outcome =</span> <span class="st">&quot;response&quot;</span>, <span class="at">covariates =</span> <span class="st">&quot;age&quot;</span>),</span>
+<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a>  <span class="fu">set_agd</span>(agd_c, <span class="at">treatment =</span> <span class="st">&quot;treatment&quot;</span>, <span class="at">outcome_n =</span> <span class="st">&quot;n_total&quot;</span>,</span>
+<span id="cb7-9"><a href="#cb7-9" tabindex="-1"></a>          <span class="at">outcome_r =</span> <span class="st">&quot;n_events&quot;</span>, <span class="at">cov_means =</span> <span class="st">&quot;age_mean&quot;</span>, <span class="at">cov_sds =</span> <span class="st">&quot;age_sd&quot;</span>,</span>
+<span id="cb7-10"><a href="#cb7-10" tabindex="-1"></a>          <span class="at">cov_types =</span> <span class="st">&quot;continuous&quot;</span>))</span>
+<span id="cb7-11"><a href="#cb7-11" tabindex="-1"></a>dat_c <span class="ot">&lt;-</span> <span class="fu">add_integration</span>(dat_c, <span class="at">n_int =</span> <span class="dv">128</span>,</span>
+<span id="cb7-12"><a href="#cb7-12" tabindex="-1"></a>                         <span class="at">age =</span> <span class="fu">distr</span>(qnorm, <span class="at">mean =</span> age_mean, <span class="at">sd =</span> age_sd))</span>
+<span id="cb7-13"><a href="#cb7-13" tabindex="-1"></a>pts <span class="ot">&lt;-</span> <span class="fu">unnest_integration</span>(dat_c)</span>
+<span id="cb7-14"><a href="#cb7-14" tabindex="-1"></a></span>
+<span id="cb7-15"><a href="#cb7-15" tabindex="-1"></a><span class="cf">if</span> (<span class="fu">requireNamespace</span>(<span class="st">&quot;ggplot2&quot;</span>, <span class="at">quietly =</span> <span class="cn">TRUE</span>)) {</span>
+<span id="cb7-16"><a href="#cb7-16" tabindex="-1"></a>  <span class="fu">library</span>(ggplot2)</span>
+<span id="cb7-17"><a href="#cb7-17" tabindex="-1"></a>  <span class="fu">ggplot</span>(pts, <span class="fu">aes</span>(age)) <span class="sc">+</span></span>
+<span id="cb7-18"><a href="#cb7-18" tabindex="-1"></a>    <span class="fu">geom_histogram</span>(<span class="fu">aes</span>(<span class="at">y =</span> <span class="fu">after_stat</span>(density)), <span class="at">bins =</span> <span class="dv">25</span>,</span>
+<span id="cb7-19"><a href="#cb7-19" tabindex="-1"></a>                   <span class="at">fill =</span> <span class="st">&quot;#3B6B9A&quot;</span>, <span class="at">alpha =</span> <span class="fl">0.5</span>) <span class="sc">+</span></span>
+<span id="cb7-20"><a href="#cb7-20" tabindex="-1"></a>    <span class="fu">stat_function</span>(<span class="at">fun =</span> dnorm, <span class="at">args =</span> <span class="fu">list</span>(<span class="at">mean =</span> <span class="dv">60</span>, <span class="at">sd =</span> <span class="dv">9</span>),</span>
+<span id="cb7-21"><a href="#cb7-21" tabindex="-1"></a>                  <span class="at">color =</span> <span class="st">&quot;darkred&quot;</span>, <span class="at">linewidth =</span> <span class="fl">0.8</span>) <span class="sc">+</span></span>
+<span id="cb7-22"><a href="#cb7-22" tabindex="-1"></a>    <span class="fu">labs</span>(<span class="at">x =</span> <span class="st">&quot;Age (comparator integration points)&quot;</span>, <span class="at">y =</span> <span class="st">&quot;Density&quot;</span>,</span>
+<span id="cb7-23"><a href="#cb7-23" tabindex="-1"></a>         <span class="at">title =</span> <span class="st">&quot;QMC integration points reproduce the requested Normal(60, 9)&quot;</span>) <span class="sc">+</span></span>
+<span id="cb7-24"><a href="#cb7-24" tabindex="-1"></a>    <span class="fu">theme_minimal</span>()</span>
+<span id="cb7-25"><a href="#cb7-25" tabindex="-1"></a>}</span></code></pre></div>
+<p><img role="img" aria-label src="data:image/png;base64,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" alt style="display: block; margin: auto;" /></p>
 </div>
 </div>
-<div id="notes-on-stc-and-naive" class="section level2">
-<h2>Notes on STC and naive</h2>
-<p>The STC and naive methods do <strong>not</strong> require integration
-points. The STC uses integration points if available (for better
-marginalization), but falls back to AgD covariate means if they are not.
-You can call <code>stc()</code> and <code>naive()</code> immediately
-after <code>combine_data()</code>.</p>
-<div class="sourceCode" id="cb15"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" tabindex="-1"></a><span class="co"># These work without add_integration()</span></span>
-<span id="cb15-2"><a href="#cb15-2" tabindex="-1"></a>dat_no_int <span class="ot">&lt;-</span> <span class="fu">combine_data</span>(ipd, agd)</span>
-<span id="cb15-3"><a href="#cb15-3" tabindex="-1"></a>naive_result <span class="ot">&lt;-</span> <span class="fu">naive</span>(dat_no_int)</span>
-<span id="cb15-4"><a href="#cb15-4" tabindex="-1"></a>stc_result <span class="ot">&lt;-</span> <span class="fu">stc</span>(dat_no_int)</span></code></pre></div>
+<div id="integration-requirements-for-stc-and-naive" class="section level2">
+<h2>Integration requirements for STC and naive</h2>
+<p><code>naive()</code> can be called immediately after
+<code>combine_data()</code> because it uses only the observed crude
+outcomes. <code>stc()</code> requires integration points for nonlinear
+links, including binomial and Poisson outcomes and normal-log models.
+Replacing a covariate distribution by its mean before applying a
+nonlinear inverse link does not recover the marginal outcome. Only the
+normal identity-link STC can use the aggregate means directly; see
+<code>vignette(&quot;choosing-a-method&quot;)</code>.</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a>dat_no_int <span class="ot">&lt;-</span> <span class="fu">combine_data</span>(ipd, agd)</span>
+<span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a><span class="fu">naive</span>(dat_no_int)</span>
+<span id="cb8-3"><a href="#cb8-3" tabindex="-1"></a><span class="co">#&gt; Naive Unadjusted Indirect Comparison</span></span>
+<span id="cb8-4"><a href="#cb8-4" tabindex="-1"></a><span class="co">#&gt; =====================================</span></span>
+<span id="cb8-5"><a href="#cb8-5" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb8-6"><a href="#cb8-6" tabindex="-1"></a><span class="co">#&gt; Treatments: Drug_A vs Drug_B </span></span>
+<span id="cb8-7"><a href="#cb8-7" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb8-8"><a href="#cb8-8" tabindex="-1"></a><span class="co">#&gt; Population basis: index-study outcome versus comparator-population outcome; no common standardized target.</span></span>
+<span id="cb8-9"><a href="#cb8-9" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb8-10"><a href="#cb8-10" tabindex="-1"></a><span class="co">#&gt; Event rates:</span></span>
+<span id="cb8-11"><a href="#cb8-11" tabindex="-1"></a><span class="co">#&gt;   Index (IPD):      0.606 (303/500)</span></span>
+<span id="cb8-12"><a href="#cb8-12" tabindex="-1"></a><span class="co">#&gt;   Comparator (AgD): 0.400 (160/400)</span></span>
+<span id="cb8-13"><a href="#cb8-13" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb8-14"><a href="#cb8-14" tabindex="-1"></a><span class="co">#&gt; Log Odds Ratio: 0.8360 (SE: 0.1371)</span></span>
+<span id="cb8-15"><a href="#cb8-15" tabindex="-1"></a><span class="co">#&gt; 95% CI: [0.5673, 1.1047]</span></span>
+<span id="cb8-16"><a href="#cb8-16" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb8-17"><a href="#cb8-17" tabindex="-1"></a><span class="co">#&gt; All effect measures (95% CI):</span></span>
+<span id="cb8-18"><a href="#cb8-18" tabindex="-1"></a><span class="co">#&gt;   Log odds ratio                 0.8360 (SE 0.1371) [0.5673, 1.1047]</span></span>
+<span id="cb8-19"><a href="#cb8-19" tabindex="-1"></a><span class="co">#&gt;   Odds ratio                     2.3071 [1.7635, 3.0183]</span></span>
+<span id="cb8-20"><a href="#cb8-20" tabindex="-1"></a><span class="co">#&gt;   Risk difference                0.2060 (SE 0.0328) [0.1417, 0.2703]</span></span>
+<span id="cb8-21"><a href="#cb8-21" tabindex="-1"></a><span class="co">#&gt;   Risk ratio                     1.5150 [1.3180, 1.7414]</span></span>
+<span id="cb8-22"><a href="#cb8-22" tabindex="-1"></a><span class="fu">stc</span>(dat)</span>
+<span id="cb8-23"><a href="#cb8-23" tabindex="-1"></a><span class="co">#&gt; Simulated Treatment Comparison (G-computation)</span></span>
+<span id="cb8-24"><a href="#cb8-24" tabindex="-1"></a><span class="co">#&gt; ===============================================</span></span>
+<span id="cb8-25"><a href="#cb8-25" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb8-26"><a href="#cb8-26" tabindex="-1"></a><span class="co">#&gt; Treatments: Drug_A vs Drug_B </span></span>
+<span id="cb8-27"><a href="#cb8-27" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb8-28"><a href="#cb8-28" tabindex="-1"></a><span class="co">#&gt; Estimand population: comparator</span></span>
+<span id="cb8-29"><a href="#cb8-29" tabindex="-1"></a><span class="co">#&gt; Treating this as the index-population effect requires a separate effect-equality assumption; this calculation does not transport to the index population.</span></span>
+<span id="cb8-30"><a href="#cb8-30" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb8-31"><a href="#cb8-31" tabindex="-1"></a><span class="co">#&gt; Marginalized P(Y=1|index trt, comp pop): 0.6025</span></span>
+<span id="cb8-32"><a href="#cb8-32" tabindex="-1"></a><span class="co">#&gt; Observed P(Y=1|comp trt, comp pop):      0.4000</span></span>
+<span id="cb8-33"><a href="#cb8-33" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb8-34"><a href="#cb8-34" tabindex="-1"></a><span class="co">#&gt; Log Odds Ratio: 0.8213 (SE: 0.1383)</span></span>
+<span id="cb8-35"><a href="#cb8-35" tabindex="-1"></a><span class="co">#&gt; 95% CI: [0.5503, 1.0923]</span></span>
+<span id="cb8-36"><a href="#cb8-36" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb8-37"><a href="#cb8-37" tabindex="-1"></a><span class="co">#&gt; All effect measures (95% CI):</span></span>
+<span id="cb8-38"><a href="#cb8-38" tabindex="-1"></a><span class="co">#&gt;   Log odds ratio                 0.8213 (SE 0.1383) [0.5503, 1.0923]</span></span>
+<span id="cb8-39"><a href="#cb8-39" tabindex="-1"></a><span class="co">#&gt;   Odds ratio                     2.2736 [1.7339, 2.9812]</span></span>
+<span id="cb8-40"><a href="#cb8-40" tabindex="-1"></a><span class="co">#&gt;   Risk difference                0.2025 (SE 0.0332) [0.1375, 0.2675]</span></span>
+<span id="cb8-41"><a href="#cb8-41" tabindex="-1"></a><span class="co">#&gt;   Risk ratio                     1.5062 [1.3091, 1.7331]</span></span>
+<span id="cb8-42"><a href="#cb8-42" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb8-43"><a href="#cb8-43" tabindex="-1"></a><span class="co">#&gt; Outcome model coefficients:</span></span>
+<span id="cb8-44"><a href="#cb8-44" tabindex="-1"></a><span class="co">#&gt; (Intercept)   age_group         sex </span></span>
+<span id="cb8-45"><a href="#cb8-45" tabindex="-1"></a><span class="co">#&gt;      0.3515      0.1693      0.0142</span></span></code></pre></div>
 </div>
 
 

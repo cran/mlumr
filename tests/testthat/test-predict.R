@@ -11,6 +11,13 @@ make_predict_fit <- function() {
   draws[["p_index_comparator"]] <- c(0.65, 0.75)
   draws[["p_comparator_comparator"]] <- c(0.45, 0.55)
 
+  for (nm in c("index_index", "comparator_index",
+               "index_comparator", "comparator_comparator")) {
+    p <- draws[[paste0("p_", nm)]]
+    draws[[paste0("log_p_", nm)]] <- log(p)
+    draws[[paste0("log_q_", nm)]] <- log1p(-p)
+  }
+
   draws[["lor_index"]] <- qlogis(draws[["p_index_index"]]) -
     qlogis(draws[["p_comparator_index"]])
   draws[["lor_comparator"]] <- qlogis(draws[["p_index_comparator"]]) -
@@ -58,15 +65,47 @@ test_that("predict summarizes response-scale generated quantities", {
 })
 
 
-test_that("predict computes link-scale marginal linear predictors directly", {
+test_that("predict links population-standardized response means", {
   fit <- make_predict_fit()
 
   link_draws <- predict(fit, type = "link", summary = FALSE)
 
-  expect_equal(link_draws[["p_index_index"]], c(0.5, 1.5))
-  expect_equal(link_draws[["p_comparator_index"]], c(-0.5, 0.5))
-  expect_equal(link_draws[["p_index_comparator"]], c(1, 2))
-  expect_equal(link_draws[["p_comparator_comparator"]], c(0, 1))
+  expect_equal(link_draws[["p_index_index"]], qlogis(c(0.60, 0.70)))
+  expect_equal(link_draws[["p_comparator_index"]], qlogis(c(0.40, 0.50)))
+  expect_equal(link_draws[["p_index_comparator"]], qlogis(c(0.65, 0.75)))
+  expect_equal(link_draws[["p_comparator_comparator"]], qlogis(c(0.45, 0.55)))
+})
+
+
+test_that("target link predictions transform the marginal response", {
+  fit <- make_predict_fit()
+  target <- data.frame(x = c(0, 2))
+
+  response <- predict(fit, newdata = target, summary = FALSE)
+  linked <- predict(fit, newdata = target, type = "link", summary = FALSE)
+
+  # The target route names its columns after the arm and the target population,
+  # matching the built-in route's p_<arm>_<population>, rather than after the
+  # treatment labels.
+  expect_named(response, c("p_index_target", "p_comparator_target"))
+  expect_named(linked, c("p_index_target", "p_comparator_target"))
+  for (nm in c("p_index_target", "p_comparator_target")) {
+    expect_equal(linked[[nm]], qlogis(response[[nm]]), tolerance = 1e-12)
+  }
+  # Linking the marginal response is not the same as averaging the linear
+  # predictors, which is what c(0.5, 1.5) would be here.
+  expect_false(isTRUE(all.equal(linked$p_index_target, c(0.5, 1.5))))
+})
+
+
+test_that("older finite binary predictions retain a link-scale fallback", {
+  fit <- make_predict_fit()
+  fit$draws[grep("^log_[pq]_", names(fit$draws))] <- NULL
+  linked <- predict(fit, type = "link", summary = FALSE)
+  expect_equal(linked$p_index_index, qlogis(c(0.60, 0.70)))
+
+  fit$draws$p_index_index[1] <- 0
+  expect_error(predict(fit, type = "link"), "refit the model")
 })
 
 

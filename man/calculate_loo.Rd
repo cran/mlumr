@@ -4,12 +4,24 @@
 \alias{calculate_loo}
 \title{Calculate LOO-CV for an mlumr_fit}
 \usage{
-calculate_loo(object, ...)
+calculate_loo(
+  object,
+  survival_unit = c("observation", "arm", "aggregate"),
+  ...
+)
 }
 \arguments{
 \item{object}{An \code{mlumr_fit} object.}
 
-\item{...}{Additional arguments passed to \code{\link[loo:loo.array]{loo::loo.array()}}.}
+\item{survival_unit}{For survival fits, the LOO/WAIC pointwise unit:
+\code{"observation"} (default; per reconstructed comparator pseudo-individual,
+optimistic), \code{"arm"} (group the comparator pseudo-IPD by comparator arm, so
+each external arm is one held-out unit), or \code{"aggregate"} (all comparator
+pseudo-IPD as a single external-evidence unit). The index IPD always stays
+per-individual. Ignored for non-survival families.}
+
+\item{...}{Further arguments passed to \code{\link[loo:loo]{loo::loo()}}; \code{r_eff} is computed
+from the fit's chains.}
 }
 \value{
 An object of class \code{psis_loo} (see \code{\link[loo:loo]{loo::loo()}}).
@@ -22,19 +34,22 @@ Stan models. Returns a \code{loo} object from the \code{loo} package.
 \details{
 Pareto-k diagnostics: values > 0.7 indicate observations for which the
 PSIS approximation is unreliable; the printed output flags these.
-Typical remedies are running more iterations, using \code{moment_match = TRUE},
-or (for highly influential AgD rows) refitting without the offending
-observation to check sensitivity.
+Typical remedies are running more iterations or, for highly influential
+AgD rows, refitting without the offending observation to check
+sensitivity. Moment matching (\code{\link[loo:loo_moment_match]{loo::loo_moment_match()}}) needs the fitted
+model rather than a log-likelihood matrix, so \code{moment_match} is refused.
 }
 \note{
-\strong{AgD rows are treated as independent observations.} Each AgD row
-contributes one column to the pointwise \code{log_lik} matrix. If two or
-more AgD rows come from the same study (e.g. subgroup summaries
-within a single trial) the PSIS-LOO approximation does not account
-for the within-study clustering; effective sample sizes are
-inflated and Pareto-k warnings are understated. For clustered AgD,
-corroborate with \code{\link[=prior_sensitivity]{prior_sensitivity()}} or refit omitting suspect
-rows to check the influence on the posterior.
+\strong{AgD rows are treated as independent observations.} Subgroup rows from
+one study share no clustering term, so their effective sample sizes are
+inflated and Pareto-k warnings understated; corroborate with
+\code{\link[=prior_sensitivity]{prior_sensitivity()}} or by refitting without suspect rows.
+
+\strong{Survival fits.} The comparator enters as reconstructed pseudo-IPD, so
+the default pointwise unit is one pseudo-individual and the criteria are
+optimistic relative to leaving out the comparator arm. Set
+\code{survival_unit = "arm"} or \code{"aggregate"} to hold out whole comparator
+arms or all of the external evidence instead.
 }
 \examples{
 \dontrun{

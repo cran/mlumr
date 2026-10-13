@@ -33,14 +33,25 @@ dependence structure does not (rare in practice for QMC with sensible
 \item{verbose}{Logical; if \code{FALSE}, suppresses printed diagnostic messages.}
 }
 \value{
-A list with components \code{marginals} (the original data frame
-returned by previous versions) and, if \code{check_joint = TRUE},
-\code{correlations} -- a data frame of pairwise covariate correlations at
-the current and doubled \code{n_int} for each AgD row. Printed with a
-pass/warn verdict.
+A list with \code{marginals}, a data frame of grid means and SDs at the
+current and doubled \code{n_int} against the declared targets, and \code{verdict},
+whose entries are \code{"stable"} or \code{"close"} when a comparison met the
+heuristic, \code{"review"} when it did not, \code{"partial"} when the measured
+correlation pairs passed but some pair could not be measured, and
+\code{"unavailable"} when there was nothing finite to compare (a latent
+matrix under \code{cor_adjust = "none"} is never compared). With
+\code{check_joint = TRUE} and two or more covariates it also holds
+\code{correlations}, the pairwise correlations per AgD row on both grids, and
+\code{correlation_pairs}, which counts the pairs measured and names the rest.
+A binary margin's target SD is \code{sqrt(p * (1 - p))} from the declared
+mean, and grid SDs are population SDs.
 }
 \description{
 Compare integration results at the current \code{n_int} against a doubled
 resolution to assess numerical accuracy. Large discrepancies indicate
-that \code{n_int} should be increased.
+that \code{n_int} should be increased. Because the Sobol sequence is nested
+(the doubled set contains the current set), this current-vs-doubled
+difference is a convergence heuristic, not an error bound. Agreement between
+the two grids does not establish accuracy for rare discrete margins or for a
+final treatment-effect estimand.
 }

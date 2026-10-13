@@ -4,7 +4,11 @@
 \alias{compare_models}
 \title{Compare fitted ML-UMR models}
 \usage{
-compare_models(..., criterion = c("dic", "loo", "waic"))
+compare_models(
+  ...,
+  criterion = c("dic", "loo", "waic"),
+  survival_unit = c("observation", "arm", "aggregate")
+)
 }
 \arguments{
 \item{...}{Two or more \code{mlumr_fit} objects. For DIC, \code{mlumr_dic}
@@ -12,6 +16,13 @@ objects are also accepted.}
 
 \item{criterion}{One of \code{"dic"} (default), \code{"loo"}, or \code{"waic"}.
 LOO and WAIC require the optional \code{loo} package.}
+
+\item{survival_unit}{For survival fits compared by \code{"loo"}/\code{"waic"}, the
+pointwise unit forwarded to \code{\link[=calculate_loo]{calculate_loo()}} / \code{\link[=calculate_waic]{calculate_waic()}}:
+\code{"observation"} (default; per reconstructed comparator pseudo-individual,
+optimistic), \code{"arm"}, or \code{"aggregate"}. Choose \code{"arm"} or \code{"aggregate"} to
+select on whole-external-arm predictive fit. Ignored for non-survival
+families and for \code{criterion = "dic"}.}
 }
 \value{
 For \code{"loo"} / \code{"waic"}: a \code{compare.loo} table from
@@ -21,8 +32,10 @@ columns \code{Model}, \code{DIC}, \code{pD}, \code{Delta_DIC}.
 \description{
 Compare two or more \code{mlumr_fit} objects by DIC (default), LOO, or WAIC.
 For LOO/WAIC, \code{\link[loo:loo_compare]{loo::loo_compare()}} is used under the hood; the output
-is the standard \code{loo_compare} table. For DIC the return is a data
-frame ordered by DIC.
+is the standard \code{loo_compare} table. The pointwise scores are paired
+observation by observation, so the fits must be of the same data in the
+same row order; fits whose stored outcomes differ are refused. For DIC the
+return is a data frame ordered by DIC.
 }
 \details{
 DIC is the default for backward compatibility and because it has no

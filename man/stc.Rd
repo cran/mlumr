@@ -4,65 +4,117 @@
 \alias{stc}
 \title{Simulated treatment comparison via G-computation}
 \usage{
-stc(data, link = NULL, conf_level = 0.95)
+stc(
+  data,
+  link = NULL,
+  conf_level = 0.95,
+  distribution = "weibull",
+  n_boot = 200L,
+  seed = NULL,
+  rmst_horizon = NULL
+)
 }
 \arguments{
 \item{data}{An \code{mlumr_data} object from \code{\link[=combine_data]{combine_data()}}. Integration points
-are not required for STC but covariate information from the AgD is used.}
+from \code{\link[=add_integration]{add_integration()}} are required whenever the outcome model uses a
+nonlinear link (binomial, Poisson, normal-log, or survival). Substitution
+of aggregate means is exact only for a normal identity-link model.}
 
 \item{link}{Link function. For binomial: \code{"logit"} (default), \code{"probit"},
 or \code{"cloglog"}. For normal: \code{"identity"} (default) or \code{"log"}. For
-poisson: \code{"log"} (default). If \code{NULL}, uses the canonical default.}
+poisson: \code{"log"} (default). Ignored for survival. If \code{NULL}, uses the
+canonical default.}
 
 \item{conf_level}{Confidence level for the interval (default 0.95)}
+
+\item{distribution}{For \code{family = "survival"}: the parametric distribution
+of the survival G-computation (default \code{"weibull"}), fitted with
+\pkg{flexsurv}; the estimand is the restricted mean survival time
+difference. \code{"mspline"} and \code{"pexp"} have no parametric analogue and fall
+back to a Weibull fit with a warning, recorded as \code{approximated = TRUE}.
+Survival STC supports right-censored data without delayed entry.}
+
+\item{n_boot}{For \code{family = "survival"} only: number of bootstrap resamples
+for the RMST-difference standard error (default \code{200}; 0 gives a point
+estimate with no interval). Other families use the delta method.}
+
+\item{seed}{For \code{family = "survival"} only: optional integer seed for the
+bootstrap, making the standard error reproducible. The global random
+number stream is restored on exit. Ignored for other families.}
+
+\item{rmst_horizon}{For \code{family = "survival"} only: the restriction time of
+the RMST difference. Defaults to the largest observed time across both
+arms; set it explicitly to match an \code{\link[=mlumr]{mlumr()}} fit, whose default can
+differ. A horizon beyond the observed range extrapolates and warns.}
 }
 \value{
-An object of class \code{mlumr_stc}
+An object of class \code{mlumr_stc}. Its \code{separation} component records
+the outcome of the binomial separation check: \code{status} is
+\code{"not_separated"} when the exact check ran and found none, \code{"unknown"}
+when only the fitted-value screen ran (it cannot see quasi-complete
+separation), and \code{"not_applicable"} for other outcome models. A
+separated fit, and a Poisson fit with no events, are refused rather than
+returned.
 }
 \description{
-Perform an unanchored simulated treatment comparison (STC) using parametric
-G-computation. Fits a regression on IPD, predicts counterfactual
-outcomes in both the index and comparator populations, and computes
-marginal treatment effects with delta-method standard errors.
+Perform an unanchored simulated treatment comparison (STC) with marginal
+standardization. Fits an outcome regression to the single IPD treatment arm,
+standardizes its predictions over the comparator-population covariate
+distribution, and contrasts that outcome with the reported comparator-arm
+outcome in the same population. It does not standardize either treatment to
+the index population.
 }
 \details{
-For binomial outcomes, returns the treatment effect on the link scale plus
-event probabilities, risk difference, and log risk ratio with SEs and CIs
-for both populations. Event-probability intervals use Wald standard errors
-and are bounded to \verb{[0, 1]}. For Poisson outcomes, the comparator log rate
-uses a 0.5 continuity correction when the observed event count is zero.
+For binomial outcomes the result carries the link-scale effect, the
+standardized and observed event probabilities, the risk difference and the
+log risk ratio, with delta-method Wald intervals; the observed comparator
+proportion gets the exact Clopper-Pearson interval, as in \code{\link[=naive]{naive()}}. An
+observed comparator arm with zero or all events uses the pseudo-count
+\code{(r + 0.5) / (n + 1)} in transformed measures. For Poisson outcomes \verb{$rd}
+is a rate difference per unit exposure and \verb{$estimate} the log rate ratio,
+with a 0.5 continuity correction for a zero comparator count.
 
-The STC procedure is:
-\enumerate{
-\item Fit a GLM on IPD (binomial/gaussian/poisson as appropriate).
-\item Predict on comparator-population covariates (from integration points or
-AgD covariate means).
-\item Marginalize predictions over the comparator population.
-\item Predict on index-population covariates (IPD).
-\item Compute treatment effects and SEs via the delta method.
-}
+Scale note: \verb{$estimate} (and the binomial \verb{$log_rr}) is on the link / log
+scale, where the null is 0. To compare against the natural-scale risk ratio
+or rate ratio from \code{\link[=marginal_effects]{marginal_effects()}} (where the null is 1), exponentiate
+it (e.g. \code{exp(result$estimate)}).
 
-STC is a parametric G-computation benchmark. It relies on the IPD outcome
-model being correctly specified and transportable to the comparator
-population. It does not model posterior uncertainty in population
-covariate distributions or relax treatment-specific covariate effects.
-When clinically meaningful effect modification is plausible, prefer
-\code{mlumr(..., model = "relaxed")} as the primary analysis and use STC as a
-sensitivity or benchmarking analysis.
+Normal-family weighting note: across multiple AgD rows, the normal STC
+comparator-population prediction and observed mean use sample-size
+(\code{outcome_n}) weights, matching the Bayesian ML-UMR comparator-population
+estimand. \code{outcome_n} is required when there is more than one row; a single
+row has weight one. The observed comparator-mean variance combines
+independent, mutually exclusive strata as \code{sum(w^2 * se^2)} using normalized
+population weights.
 
-For binomial outcomes, the comparator-population treatment contrast is
-transported to the index population \strong{assuming the treatment contrast is
-constant on the fitted link scale} (i.e., no effect modification on that
-scale). Under this assumption, the index-population comparator
-probability is computed as
-\code{inv_link(link(p_A_index) - (link(p_A_comp) - link(p_B)))}, and its
-uncertainty is propagated through the delta method. If effect modification
-is expected, fit a Bayesian relaxed model with
-\code{mlumr(..., model = "relaxed")} and use \code{predict(..., population = "index")} instead, which does not require this assumption.
+A GLM is fitted to the IPD, its predictions are averaged over the
+comparator covariate distribution (the integration points, or the AgD means
+for the identity-link normal case) on the response scale, and the average
+is contrasted with the reported comparator outcome, as in Ren et al.'s
+unanchored STC. Standard errors are first-order delta-method values,
+conditional on the integration grid and the reported comparator summaries.
+The estimand is \code{E_B[m_A(X)] - E_B[Y_B]} in the comparator population
+(\verb{$rd} for binomial, \verb{$md} for normal); \verb{$estimate} is the link-scale
+contrast of the two standardized quantities. Survival STC contrasts the
+index RMST standardized to the comparator covariates with the RMST of an
+intercept-only \code{\link[flexsurv:flexsurvreg]{flexsurv::flexsurvreg()}} fit to the pseudo-IPD. The effect
+is not transported to the index population; \code{mlumr(model = "relaxed")}
+estimates comparator-specific covariate effects for any other target.
 }
 \examples{
 \dontrun{
 result <- stc(dat)
 print(result)
 }
+}
+\references{
+Ren S, Ren S, Welton NJ, Strong M (2024). Advancing unanchored simulated
+treatment comparisons: A novel implementation and simulation study.
+\emph{Research Synthesis Methods}, 15(4), 657-670.
+\doi{10.1002/jrsm.1718}
+
+Remiro-Azocar A, Heath A, Baio G (2022). Parametric G-computation for
+compatible indirect treatment comparisons with limited individual patient
+data. \emph{Research Synthesis Methods}, 13(6), 716-744.
+\doi{10.1002/jrsm.1565}
 }

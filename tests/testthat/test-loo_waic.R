@@ -1,10 +1,10 @@
 # Pure-R tests for calculate_loo(), calculate_waic(), and mixed-criterion
-# compare_models(). No Stan compilation — we construct mock mlumr_fit
+# compare_models(). No Stan compilation: we construct mock mlumr_fit
 # objects whose $draws carries the vector-indexed `log_lik_ipd[i]` and
-# `log_lik_agd[i]` columns that all six shipping Stan models emit.
+# `log_lik_agd[i]` columns that all ten shipping Stan models emit.
 
 make_ll_fit <- function(model = "spfa", n_draws = 400,
-                        n_ipd = 12L, n_agd = 4L, seed = 1L) {
+                        n_ipd = 12L, n_agd = 4L, seed = 2026) {
   set.seed(seed)
   ll_ipd <- matrix(rnorm(n_draws * n_ipd, -5, 0.5), nrow = n_draws)
   ll_agd <- matrix(rnorm(n_draws * n_agd, -6, 0.5), nrow = n_draws)
@@ -28,31 +28,14 @@ make_ll_fit <- function(model = "spfa", n_draws = 400,
     ),
     model = model,
     diagnostics = list(n_divergent = 0, n_max_treedepth = 0),
-    sampling_args = list(adapt_delta = 0.95, max_treedepth = 15, chains = 4)
+    sampling_args = list(adapt_delta = 0.95, max_treedepth = 15, chains = 4),
+    stan_data = list(n_ipd = n_ipd, n_agd_rows = n_agd)
   )
   class(out) <- c("mlumr_fit", "list")
   out
 }
 
 
-# extract_log_lik is internal but we can probe it via mlumr:::
-test_that("extract_log_lik orders columns and returns a numeric matrix", {
-  fit <- make_ll_fit(n_ipd = 5L, n_agd = 2L)
-  ll <- mlumr:::extract_log_lik(fit)
-  expect_true(is.matrix(ll))
-  expect_equal(dim(ll), c(400L, 7L))
-  # The last IPD column (index 5) should precede the first AgD column
-  expect_equal(colnames(ll)[5], "log_lik_ipd[5]")
-  expect_equal(colnames(ll)[6], "log_lik_agd[1]")
-})
-
-
-test_that("extract_log_lik rejects fits with no pointwise columns", {
-  fit <- make_ll_fit()
-  fit$draws <- fit$draws[, c("lor_index", "lor_comparator")]
-  expect_error(mlumr:::extract_log_lik(fit),
-               "Pointwise log-likelihood columns not found")
-})
 
 
 test_that("calculate_loo returns a psis_loo object", {
@@ -100,8 +83,8 @@ test_that("calculate_loo errors informatively without pointwise log_lik", {
 
 test_that("compare_models with criterion = 'loo' returns a compare.loo", {
   skip_if_not_installed("loo")
-  fit1 <- make_ll_fit("spfa", seed = 1L)
-  fit2 <- make_ll_fit("relaxed", seed = 2L)
+  fit1 <- make_ll_fit("spfa", seed = 2026)
+  fit2 <- make_ll_fit("relaxed", seed = 2026)
   out <- suppressWarnings(
     capture.output(cmp <- compare_models(fit1, fit2, criterion = "loo"))
   )
@@ -114,8 +97,8 @@ test_that("compare_models with criterion = 'loo' returns a compare.loo", {
 
 test_that("compare_models with criterion = 'waic' returns a compare.loo", {
   skip_if_not_installed("loo")
-  fit1 <- make_ll_fit("spfa", seed = 1L)
-  fit2 <- make_ll_fit("relaxed", seed = 2L)
+  fit1 <- make_ll_fit("spfa", seed = 2026)
+  fit2 <- make_ll_fit("relaxed", seed = 2026)
   out <- suppressWarnings(
     capture.output(cmp <- compare_models(fit1, fit2, criterion = "waic"))
   )
@@ -135,12 +118,95 @@ test_that("compare_models rejects mixed mlumr_fit + mlumr_dic for LOO/WAIC", {
 })
 
 
-test_that(".chain_id recovers chain ids in chain-major order", {
-  fit <- make_ll_fit(n_draws = 400)  # chains = 4 -> 100 per chain
-  ids <- mlumr:::.chain_id(fit)
-  expect_equal(length(ids), 400L)
-  expect_equal(sort(unique(ids)), 1:4)
-  # First and last 100 draws belong to different chains
-  expect_equal(ids[1], 1L)
-  expect_equal(ids[400], 4L)
+test_that("survival LOO/WAIC can group the comparator pseudo-IPD by arm/aggregate", {
+  glb <- mlumr:::.survival_log_lik_by_unit
+  draws <- data.frame(
+    `log_lik_ipd[1]` = c(-1, -2), `log_lik_ipd[2]` = c(-1.5, -2.5),
+    `log_lik_agd[1]` = c(-0.1, -0.2), `log_lik_agd[2]` = c(-0.3, -0.4),
+    `log_lik_agd[3]` = c(-0.5, -0.6), `log_lik_agd[4]` = c(-0.7, -0.8),
+    check.names = FALSE
+  )
+  obj <- list(family = "survival", draws = draws,
+              stan_data = list(n_ipd = 2L, n_agd = 4L,
+                               agd_arm = c(1L, 1L, 2L, 2L)))
+  arm <- glb(obj, "arm")
+  expect_equal(ncol(arm), 4L)
+  expect_equal(unname(arm[, 3]), c(-0.1 - 0.3, -0.2 - 0.4))
+  expect_equal(unname(arm[, 4]), c(-0.5 - 0.7, -0.6 - 0.8))
+  agg <- glb(obj, "aggregate")
+  expect_equal(ncol(agg), 3L)
+  expect_equal(unname(agg[, 3]), c(-1.6, -2.0))
+  bad <- obj
+  bad$stan_data$agd_arm <- c(1L, 2L)
+  expect_error(glb(bad, "arm"), "arm map")
+})
+
+
+test_that("the expected columns follow the family's pointwise unit", {
+  # A regression guard: every complete fit below passed before and must pass
+  # after. Survival counts one column per reconstructed pseudo-individual.
+  surv <- make_ll_fit(n_ipd = 3L, n_agd = 4L)
+  surv$family <- "survival"
+  surv$stan_data <- list(n_ipd = 3L, n_agd_rows = 1L, n_agd = 4L)
+  expect_identical(ncol(mlumr:::extract_log_lik(surv)), 7L)
+  # Elsewhere `n_agd` is each row's sample size and the columns are the rows.
+  bin <- make_ll_fit(n_ipd = 3L, n_agd = 1L)
+  bin$stan_data <- list(n_ipd = 3L, n_agd_rows = 1L, n_agd = 200L)
+  expect_identical(ncol(mlumr:::extract_log_lik(bin)), 4L)
+  # Expanded tied rows: one column per original observation.
+  tied <- make_ll_fit(n_ipd = 3L, n_agd = 6L)
+  tied$stan_data <- list(n_ipd = 3L, n_agd_rows = 3L,
+                         agd_count = c(2L, 1L, 3L))
+  expect_identical(ncol(mlumr:::extract_log_lik(tied)), 9L)
+  # A complete fit in another column order scores exactly as before.
+  fit <- make_ll_fit(n_ipd = 5L, n_agd = 2L)
+  shuffled <- fit
+  shuffled$draws <- shuffled$draws[, rev(seq_along(shuffled$draws))]
+  expect_identical(calculate_dic(shuffled)$DIC, calculate_dic(fit)$DIC)
+})
+
+test_that("a score with likelihood terms not saved is refused", {
+  # A fit saved with `pars = "log_lik_agd", include = FALSE` still used that
+  # evidence in the posterior; scoring the columns left would report a subset.
+  fit <- make_ll_fit(n_ipd = 3L, n_agd = 2L)
+  fit$draws[c("log_lik_agd[1]", "log_lik_agd[2]")] <- NULL
+  expect_error(calculate_dic(fit), "Refit with the generated quantities")
+  surv <- make_ll_fit(n_ipd = 3L, n_agd = 4L)
+  surv$family <- "survival"
+  surv$stan_data <- list(n_ipd = 3L, n_agd = 4L, agd_arm = c(1L, 1L, 2L, 2L))
+  surv$draws[grep("^log_lik_ipd", names(surv$draws))] <- NULL
+  expect_error(mlumr:::.survival_log_lik_by_unit(surv, "arm"),
+               "Refit with the generated quantities")
+})
+
+test_that("LOO/WAIC comparison pairs the same observations", {
+  skip_if_not_installed("loo")
+  a <- make_ll_fit(n_ipd = 6L, n_agd = 2L, seed = 1)
+  b <- make_ll_fit(n_ipd = 6L, n_agd = 2L, seed = 2)
+  a$stan_data$y_ipd <- b$stan_data$y_ipd <- c(0L, 1L, 1L, 0L, 1L, 0L)
+  a$stan_data$r_agd <- b$stan_data$r_agd <- c(3L, 5L)
+  out <- capture.output(
+    cmp <- suppressWarnings(compare_models(a, b, criterion = "waic"))
+  )
+  expect_s3_class(cmp, "compare.loo")
+  # The same data stored in another row order is not the same pairing.
+  b$stan_data$y_ipd <- rev(b$stan_data$y_ipd)
+  expect_error(capture.output(compare_models(a, b, criterion = "waic")),
+               "same row order")
+  expect_warning(
+    loo::loo_compare(suppressWarnings(calculate_waic(a)),
+                     suppressWarnings(calculate_waic(b))),
+    "yhash"
+  )
+})
+
+test_that("calculate_loo refuses moment matching it cannot perform", {
+  skip_if_not_installed("loo")
+  fit <- make_ll_fit()
+  expect_error(calculate_loo(fit, moment_match = TRUE),
+               "`moment_match` is not available", fixed = TRUE)
+  # What the matrix method does read still reaches it.
+  res <- calculate_loo(fit, cores = 1, save_psis = TRUE)
+  expect_s3_class(res, "psis_loo")
+  expect_false(is.null(res$psis_object))
 })

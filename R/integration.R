@@ -4,14 +4,37 @@
 #' Gaussian copula to account for correlations between covariates in the AgD.
 #'
 #' @param data An `mlumr_data` object from [combine_data()]
-#' @param n_int Number of integration points (default 64, powers of 2 recommended)
-#' @param cor Correlation matrix for covariates. If `NULL`, computed from IPD.
+#' @param n_int Number of integration points (default 64; use powers of 2).
+#'   More points can improve quasi-Monte Carlo integration of the AgD likelihood
+#'   and comparator-population estimands. Increase it when
+#'   [check_integration()] shows numerical sensitivity. Wider posterior
+#'   intervals alone indicate neither an inadequate grid nor a need for more
+#'   points. Larger values cost more sampling time.
+#' @param cor Correlation matrix for covariates, on the covariate scale. If
+#'   `NULL` (the default) it is estimated from the IPD; see the
+#'   correlation-transport note in Details.
 #' @param cor_adjust Adjustment method: `"spearman"`, `"pearson"`, or `"none"`
 #' @param verbose Logical; if `FALSE`, suppresses progress messages.
 #' @param ... Distribution specifications for each covariate using [distr()]
 #'
 #' @return An `mlumr_data` object with integration points added
 #' @export
+#'
+#' @details
+#' **The correlation structure is assumed to transport.** Aggregate data
+#' report marginal summaries only, so with `cor = NULL` the within-row
+#' correlation is estimated from the IPD and applied to every comparator
+#' row, as in ML-NMR (Phillippo et al. 2020). The assumption is untestable
+#' from the data; supply `cor` from an external source to vary it, and use
+#' [check_integration()] to confirm the realized moments and correlations.
+#'
+#' `cor_adjust` maps the covariate-scale correlation onto the Gaussian copula:
+#' the Spearman map is exact for continuous margins, the Pearson map holds for
+#' Gaussian margins, and pairs involving a binary margin use
+#' prevalence-independent heuristics. A nonbinary discrete margin (a count or
+#' an ordered category) is treated as continuous and its realized association
+#' need not match the target; `add_integration()` warns when it sees one.
+#' `"none"` passes a latent Gaussian-copula matrix through unchanged.
 #'
 #' @examples
 #' \dontrun{
@@ -56,6 +79,7 @@ add_integration <- function(data, n_int = 64, cor = NULL,
     n_int = n_int,
     n_cov = n_cov
   )
+  .warn_integration_vs_agd_moments(integration_points, data$agd$data, cov_names)
 
   data <- .attach_integration_points(
     data = data,
@@ -73,14 +97,12 @@ add_integration <- function(data, n_int = 64, cor = NULL,
 
 
 #' Validate top-level integration arguments
-#' @keywords internal
+#' @noRd
 .validate_integration_args <- function(data, n_int, cor_adjust, verbose, ds) {
   if (!inherits(data, "mlumr_data")) {
     stop("`data` must be created with combine_data()", call. = FALSE)
   }
-  if (!is.logical(verbose) || length(verbose) != 1L || is.na(verbose)) {
-    stop("`verbose` must be TRUE or FALSE.", call. = FALSE)
-  }
+  .validate_flag(verbose, "verbose")
   valid_cor_adjust <- c("spearman", "pearson", "none")
   invalid_cor_adjust <- !is.null(cor_adjust) &&
     (!is.character(cor_adjust) ||
@@ -116,7 +138,7 @@ add_integration <- function(data, n_int = 64, cor = NULL,
 
 
 #' Validate integration distributions against the combined data
-#' @keywords internal
+#' @noRd
 .validate_integration_distributions <- function(ds, data) {
   cov_names <- names(ds)
   if (anyDuplicated(cov_names) > 0L) {
@@ -140,14 +162,70 @@ add_integration <- function(data, n_int = 64, cor = NULL,
 }
 
 
+#' Warn when the generated grid contradicts the declared AgD moments
+#'
+#' A hand-written `distr()` that ignores the AgD columns integrates the wrong
+#' population silently. Only gross contradictions are flagged; suppress with
+#' `options(mlumr.quiet_integration_moments = TRUE)`.
+#' @noRd
+.warn_integration_vs_agd_moments <- function(X_int_array, agd_data, cov_names) {
+  if (isTRUE(getOption("mlumr.quiet_integration_moments", FALSE))) {
+    return(invisible())
+  }
+  if (is.null(agd_data) || is.null(dim(X_int_array))) return(invisible())
+  n_agd_rows <- dim(X_int_array)[1]
+  issues <- character(0)
+  for (j in seq_len(n_agd_rows)) {
+    for (i in seq_along(cov_names)) {
+      cov <- cov_names[[i]]
+      mean_col <- paste0(cov, "_mean")
+      if (!mean_col %in% names(agd_data)) next
+      declared_mean <- suppressWarnings(as.numeric(agd_data[[mean_col]][j]))
+      if (!is.finite(declared_mean)) next
+      sd_col <- paste0(cov, "_sd")
+      declared_sd <- if (sd_col %in% names(agd_data)) {
+        suppressWarnings(as.numeric(agd_data[[sd_col]][j]))
+      } else {
+        NA_real_
+      }
+      grid_mean <- mean(X_int_array[j, , i])
+      has_sd <- is.finite(declared_sd) && declared_sd > 0
+      grid_sd <- if (has_sd) stats::sd(X_int_array[j, , i]) else NA_real_
+      # Scale for a "gross contradiction": prefer the declared SD; fall back to
+      # a fraction of |declared mean| for SD-less (binary) covariates.
+      scale <- if (has_sd) declared_sd else max(0.1 * abs(declared_mean), 1e-6)
+      mean_off <- abs(grid_mean - declared_mean) > scale &&
+        abs(grid_mean - declared_mean) > 0.25 * abs(declared_mean)
+      sd_off <- has_sd && abs(grid_sd - declared_sd) > 0.5 * declared_sd
+      if (isTRUE(mean_off) || isTRUE(sd_off)) {
+        sd_dec <- if (has_sd) sprintf("%.3g", declared_sd) else "NA"
+        sd_grid <- if (has_sd) sprintf("%.3g", grid_sd) else "NA"
+        fmt <- "%s (AgD row %d): declared mean=%.3g, sd=%s; grid mean=%.3g, sd=%s"
+        one <- sprintf(fmt, cov, j, declared_mean, sd_dec, grid_mean, sd_grid)
+        issues <- c(issues, one)
+      }
+    }
+  }
+  if (length(issues)) {
+    msg <- paste0(
+      "The integration grid contradicts the declared AgD moments for:\n  %s\n",
+      "Check that each distr() references the AgD mean/SD columns. ",
+      "Suppress with options(mlumr.quiet_integration_moments = TRUE)."
+    )
+    warning(sprintf(msg, paste(issues, collapse = "\n  ")), call. = FALSE)
+  }
+  invisible()
+}
+
+
 #' Warn when integration resolution is low for the covariate dimension
-#' @keywords internal
+#' @noRd
 .warn_integration_size <- function(n_int, n_cov) {
   min_recommended <- 2^(n_cov + 4)
   if (n_int < min_recommended) {
     warning(sprintf(
       paste0("n_int = %d may be insufficient for %d covariate(s). ",
-             "Recommended minimum: %d (= 2^(n_cov+4)). ",
+             "Package heuristic: %d (= 2^(n_cov+4)). ",
              "Consider increasing n_int or using check_integration() to assess accuracy."),
       n_int, n_cov, min_recommended
     ), call. = FALSE)
@@ -157,7 +235,7 @@ add_integration <- function(data, n_int = 64, cor = NULL,
 
 
 #' Resolve raw and copula correlation matrices for integration
-#' @keywords internal
+#' @noRd
 .resolve_integration_cor <- function(data, cov_names, n_cov, cor, cor_adjust,
                                      ds, verbose) {
   if (n_cov == 1L) {
@@ -182,16 +260,63 @@ add_integration <- function(data, n_int = 64, cor = NULL,
       get_distribution_type,
       c(ds, list(data = utils::head(data$agd$data)))
     )
+    if (identical(cor_adjust, "pearson")) {
+      non_gaussian <- dtypes == "continuous" &
+        vapply(ds, function(d) !identical(d$qfun_name, "qnorm"), logical(1))
+      off_diagonal <- cor
+      diag(off_diagonal) <- 0
+      affected <- non_gaussian &
+        apply(abs(off_diagonal) > sqrt(.Machine$double.eps), 1, any)
+      if (any(affected)) {
+        stop("`cor_adjust = \"pearson\"` cannot be used with non-Gaussian ",
+             "continuous margins: a covariate-scale Pearson correlation is ",
+             "not the Gaussian-copula correlation for ",
+             paste(cov_names[affected], collapse = ", "), ". Supply a ",
+             "Spearman correlation matrix with `cor_adjust = \"spearman\"`, ",
+             "use Gaussian margins for an observed Pearson matrix, or supply ",
+             "a latent Gaussian-copula matrix with `cor_adjust = \"none\"`.",
+             call. = FALSE)
+      }
+    }
+    .warn_discrete_copula(dtypes, cov_names, cor_adjust)
     copula_cor <- .adjust_integration_cor(cor, cor_adjust, dtypes)
-    copula_cor <- .ensure_positive_definite_cor(copula_cor, n_cov)
+    copula_cor <- .ensure_positive_definite_cor(copula_cor)
 
     list(cor = cor, copula_cor = copula_cor, cor_adjust = cor_adjust)
   }
 }
 
 
+#' Warn that the copula correction does not cover nonbinary discrete margins
+#'
+#' The Spearman and Pearson corrections cover continuous margins exactly and
+#' binary margins heuristically. A count or ordinal margin goes through the
+#' continuous branch, so its realized association need not match the target.
+#'
+#' @param dtypes Distribution types from [get_distribution_type()].
+#' @param cov_names Covariate names, same order as `dtypes`.
+#' @param cor_adjust The adjustment method in force.
+#' @return `TRUE` invisibly if a warning was issued, `FALSE` otherwise.
+#' @noRd
+.warn_discrete_copula <- function(dtypes, cov_names, cor_adjust) {
+  if (identical(cor_adjust, "none")) return(invisible(FALSE))
+  hit <- which(dtypes == "discrete")
+  if (!length(hit)) return(invisible(FALSE))
+  nms <- if (length(cov_names) == length(dtypes)) cov_names[hit] else hit
+  msg <- paste0(
+    "Covariate(s) %s have a nonbinary discrete marginal (a count or ordered ",
+    "category). The `cor_adjust = \"%s\"` copula correction covers ",
+    "continuous margins exactly and binary margins heuristically, so the ",
+    "realized association for these need not match the target. Check it with ",
+    "check_integration(), passing the same `cor`."
+  )
+  warning(sprintf(msg, paste(nms, collapse = ", "), cor_adjust), call. = FALSE)
+  invisible(TRUE)
+}
+
+
 #' Validate a user-supplied integration correlation matrix
-#' @keywords internal
+#' @noRd
 .validate_integration_cor <- function(cor, n_cov, cov_names = NULL) {
   cor <- as.matrix(cor)
   if (!is.numeric(cor) || nrow(cor) != n_cov || ncol(cor) != n_cov) {
@@ -227,7 +352,7 @@ add_integration <- function(data, n_int = 64, cor = NULL,
 
 
 #' Validate an IPD-derived correlation matrix before copula adjustment
-#' @keywords internal
+#' @noRd
 .validate_computed_integration_cor <- function(cor) {
   if (any(!is.finite(cor))) {
     stop("Computed IPD correlation matrix contains non-finite values. ",
@@ -244,7 +369,7 @@ add_integration <- function(data, n_int = 64, cor = NULL,
 
 
 #' Adjust correlations to Gaussian-copula scale
-#' @keywords internal
+#' @noRd
 .adjust_integration_cor <- function(cor, cor_adjust, dtypes) {
   if (cor_adjust == "spearman") {
     cor_adjust_spearman(cor, types = dtypes)
@@ -257,50 +382,44 @@ add_integration <- function(data, n_int = 64, cor = NULL,
 
 
 #' Ensure adjusted integration correlation is positive definite
-#' @keywords internal
-.ensure_positive_definite_cor <- function(copula_cor, n_cov) {
+#' @noRd
+.ensure_positive_definite_cor <- function(copula_cor) {
   eigen_tol <- .Machine$double.eps * max(dim(copula_cor)) * 100
   if (all(eigen(copula_cor, symmetric = TRUE)$values > eigen_tol)) {
-    copula_cor
-  } else {
-    warning("Adjusted correlation matrix not positive definite; applying nearPD correction.",
-            call. = FALSE)
-    if (requireNamespace("Matrix", quietly = TRUE)) {
-      as.matrix(Matrix::nearPD(copula_cor, corr = TRUE)$mat)
-    } else {
-      copula_cor <- 0.99 * copula_cor + 0.01 * diag(n_cov)
-      diag(copula_cor) <- 1
-      copula_cor
-    }
+    return(copula_cor)
   }
+  warning("Adjusted correlation matrix not positive definite; applying nearPD correction.",
+          call. = FALSE)
+  if (!requireNamespace("Matrix", quietly = TRUE)) {
+    stop("Package 'Matrix' is required to repair a correlation matrix that ",
+         "is not positive definite.", call. = FALSE)
+  }
+  result <- as.matrix(Matrix::nearPD(copula_cor, corr = TRUE)$mat)
+  # nearPD can leave the smallest eigenvalue marginally negative.
+  if (!all(eigen(result, symmetric = TRUE)$values > eigen_tol)) {
+    stop("Could not produce a positive-definite integration correlation matrix ",
+         "after nearPD correction. Supply a valid positive-definite `cor` or ",
+         "reduce the correlation magnitudes.", call. = FALSE)
+  }
+  result
 }
 
 
 #' Generate correlated uniform quasi-Monte Carlo points
-#' @keywords internal
+#'
+#' Sobol points pushed through a Gaussian copula: normal scores, multiplied by
+#' the Cholesky factor of `copula_cor`, mapped back to uniforms. The three
+#' steps together are the inverse Rosenblatt transform of that copula.
+#' @noRd
 .generate_copula_uniforms <- function(n_int, n_cov, copula_cor) {
-  u <- randtoolbox::sobol(n = n_int, dim = n_cov)
-  if (n_cov == 1L) {
-    as.matrix(u)
-  } else {
-    u_cor <- tryCatch({
-      cop <- copula::normalCopula(copula::P2p(copula_cor), dim = n_cov,
-                                  dispstr = "un")
-      copula::cCopula(u, copula = cop, inverse = TRUE)
-    }, error = function(e) {
-      stop(paste0(
-        "Gaussian copula construction failed: ", e$message, "\n",
-        "Try using `cor_adjust = \"none\"` or check covariate distributions."
-      ), call. = FALSE)
-    })
-
-    as.matrix(u_cor)
-  }
+  u <- as.matrix(randtoolbox::sobol(n = n_int, dim = n_cov))
+  if (n_cov == 1L) return(u)
+  stats::pnorm(stats::qnorm(u) %*% chol(copula_cor))
 }
 
 
 #' Transform uniform integration points to covariate scales
-#' @keywords internal
+#' @noRd
 .transform_integration_points <- function(u_cor, data, ds, cov_names, n_int,
                                           n_cov) {
   agd_data <- data$agd$data
@@ -327,7 +446,7 @@ add_integration <- function(data, n_int = 64, cor = NULL,
 
 
 #' Attach generated integration points to an mlumr_data object
-#' @keywords internal
+#' @noRd
 .attach_integration_points <- function(data, X_int_array, n_int, cor, copula_cor,
                                        cor_adjust) {
   data$integration_points <- X_int_array
@@ -380,7 +499,11 @@ unnest_integration <- function(data) {
 #'
 #' Compare integration results at the current `n_int` against a doubled
 #' resolution to assess numerical accuracy. Large discrepancies indicate
-#' that `n_int` should be increased.
+#' that `n_int` should be increased. Because the Sobol sequence is nested
+#' (the doubled set contains the current set), this current-vs-doubled
+#' difference is a convergence heuristic, not an error bound. Agreement between
+#' the two grids does not establish accuracy for rare discrete margins or for a
+#' final treatment-effect estimand.
 #'
 #' @param data An `mlumr_data` object with integration points
 #' @param ... Distribution specifications (same as passed to
@@ -394,11 +517,18 @@ unnest_integration <- function(data) {
 #'   dependence structure does not (rare in practice for QMC with sensible
 #'   `cor_adjust` but worth flagging when `n_int` is small).
 #'
-#' @return A list with components `marginals` (the original data frame
-#'   returned by previous versions) and, if `check_joint = TRUE`,
-#'   `correlations` -- a data frame of pairwise covariate correlations at
-#'   the current and doubled `n_int` for each AgD row. Printed with a
-#'   pass/warn verdict.
+#' @return A list with `marginals`, a data frame of grid means and SDs at the
+#'   current and doubled `n_int` against the declared targets, and `verdict`,
+#'   whose entries are `"stable"` or `"close"` when a comparison met the
+#'   heuristic, `"review"` when it did not, `"partial"` when the measured
+#'   correlation pairs passed but some pair could not be measured, and
+#'   `"unavailable"` when there was nothing finite to compare (a latent
+#'   matrix under `cor_adjust = "none"` is never compared). With
+#'   `check_joint = TRUE` and two or more covariates it also holds
+#'   `correlations`, the pairwise correlations per AgD row on both grids, and
+#'   `correlation_pairs`, which counts the pairs measured and names the rest.
+#'   A binary margin's target SD is `sqrt(p * (1 - p))` from the declared
+#'   mean, and grid SDs are population SDs.
 #' @param verbose Logical; if `FALSE`, suppresses printed diagnostic messages.
 #' @export
 check_integration <- function(data, ..., cor = NULL, cor_adjust = NULL,
@@ -407,13 +537,8 @@ check_integration <- function(data, ..., cor = NULL, cor_adjust = NULL,
   if (!inherits(data, "mlumr_data")) {
     stop("`data` must be an mlumr_data object", call. = FALSE)
   }
-  if (!is.logical(verbose) || length(verbose) != 1L || is.na(verbose)) {
-    stop("`verbose` must be TRUE or FALSE.", call. = FALSE)
-  }
-  if (!is.logical(check_joint) || length(check_joint) != 1L ||
-        is.na(check_joint)) {
-    stop("`check_joint` must be TRUE or FALSE.", call. = FALSE)
-  }
+  .validate_flag(verbose, "verbose")
+  .validate_flag(check_joint, "check_joint")
   if (!data$has_integration) {
     stop("No integration points found. Use add_integration() first.", call. = FALSE)
   }
@@ -431,19 +556,54 @@ check_integration <- function(data, ..., cor = NULL, cor_adjust = NULL,
   # Re-run at doubled resolution (temporarily)
   data_copy <- data
   data_copy$has_integration <- FALSE
+  # Reuse the correlation the original integration used unless overridden.
   data_doubled <- suppressMessages(suppressWarnings(
-    add_integration(data_copy, n_int = n_int_double, cor = cor,
+    add_integration(data_copy, n_int = n_int_double, cor = cor %||% data$int_cor,
                     cor_adjust = cor_adjust %||% data$int_cor_adjust,
                     verbose = FALSE, ...)
   ))
   X_double <- data_doubled$integration_points
   stats_double <- .int_stats(X_double, cov_names, n_agd)
 
-  # Compare
+  # The mean denominator includes the SD so a near-zero target mean does not
+  # inflate the relative difference.
   rel_diff_mean <- abs(stats_orig$mean - stats_double$mean) /
-    (abs(stats_double$mean) + 1e-10)
+    (abs(stats_double$mean) + abs(stats_double$sd) + 1e-8)
   rel_diff_sd <- abs(stats_orig$sd - stats_double$sd) /
-    (abs(stats_double$sd) + 1e-10)
+    (abs(stats_double$sd) + 1e-8)
+
+  agd <- data$agd$data
+  # The target SD comes from the declared distribution: sqrt(m * (1 - m)) for
+  # a binary margin, whatever `_sd` column the AgD carries, and the declared
+  # SD column otherwise.
+  dtypes <- do.call(
+    get_distribution_type,
+    c(list(...), list(data = utils::head(agd)))
+  )
+  target_mean <- target_sd <- numeric(nrow(stats_orig))
+  for (i in seq_len(nrow(stats_orig))) {
+    cov <- stats_orig$covariate[i]
+    row <- stats_orig$agd_row[i]
+    target_mean[i] <- as.numeric(agd[[paste0(cov, "_mean")]][row])
+    sd_col <- paste0(cov, "_sd")
+    is_binary <- isTRUE(unname(dtypes[cov]) == "binary")
+    target_sd[i] <- if (is_binary) {
+      if (isTRUE(target_mean[i] >= 0 && target_mean[i] <= 1)) {
+        sqrt(target_mean[i] * (1 - target_mean[i]))
+      } else {
+        NA_real_
+      }
+    } else if (sd_col %in% names(agd)) {
+      as.numeric(agd[[sd_col]][row])
+    } else {
+      NA_real_
+    }
+  }
+  target_scale <- abs(target_mean) +
+    ifelse(is.finite(target_sd), abs(target_sd), 0) + 1e-8
+  target_diff_mean <- abs(stats_orig$mean - target_mean) / target_scale
+  target_diff_sd <- abs(stats_orig$sd - target_sd) /
+    (abs(target_sd) + 1e-8)
 
   result <- data.frame(
     covariate = stats_orig$covariate,
@@ -451,46 +611,146 @@ check_integration <- function(data, ..., cor = NULL, cor_adjust = NULL,
     mean_current = round(stats_orig$mean, 6),
     mean_doubled = round(stats_double$mean, 6),
     rel_diff_mean = round(rel_diff_mean, 6),
+    mean_target = round(target_mean, 6),
+    rel_diff_mean_target = round(target_diff_mean, 6),
     sd_current = round(stats_orig$sd, 6),
     sd_doubled = round(stats_double$sd, 6),
     rel_diff_sd = round(rel_diff_sd, 6),
+    sd_target = round(target_sd, 6),
+    rel_diff_sd_target = round(target_diff_sd, 6),
     stringsAsFactors = FALSE
   )
 
-  max_diff <- max(c(rel_diff_mean, rel_diff_sd), na.rm = TRUE)
+  max_diff <- .max_finite(c(rel_diff_mean, rel_diff_sd))
+  max_target_diff <- .max_finite(c(target_diff_mean, target_diff_sd))
 
   if (verbose) {
     cat(sprintf("Integration check: n_int = %d vs %d\n", n_int_orig, n_int_double))
-    cat(sprintf("Marginals -- max relative difference: %.4f\n", max_diff))
-    if (max_diff > 0.05) {
-      cat("WARN: >5%% marginal relative difference. Increase n_int.\n")
-    } else if (max_diff > 0.01) {
-      cat("CAUTION: 1-5%% marginal relative difference. Consider increasing n_int.\n")
+    if (is.na(max_diff)) {
+      cat("Resolution heuristic: not available (no finite comparison).\n")
     } else {
-      cat("OK marginals: <1%% relative difference.\n")
+      cat(sprintf("Resolution heuristic, max relative difference: %.4f\n", max_diff))
+      if (max_diff > 0.05) {
+        cat("Warning: >5% marginal relative difference. Increase n_int.\n")
+      } else if (max_diff > 0.01) {
+        cat("Caution: 1-5% marginal relative difference. Consider increasing n_int.\n")
+      } else {
+        cat("Resolution stable within the package's 1% heuristic.\n")
+      }
+    }
+    if (is.na(max_target_diff)) {
+      cat("Declared-target fidelity: not available; the AgD declares no",
+          "comparable moments for these covariates.\n")
+    } else {
+      cat(sprintf("Declared-target fidelity, max relative difference: %.4f\n",
+                  max_target_diff))
+      if (max_target_diff > 0.05) {
+        cat("Warning: grid moments differ from declared AgD moments by >5%.\n")
+      } else if (max_target_diff > 0.01) {
+        cat("Caution: grid moments differ from declared AgD moments by 1-5%.\n")
+      } else {
+        cat("Grid moments agree with declared AgD moments within the package's 1% heuristic.\n")
+      }
     }
   }
 
-  out <- list(marginals = result)
+  # A verdict needs a comparison: an all-NA maximum is "unavailable".
+  out <- list(
+    marginals = result,
+    verdict = list(
+      resolution = .moment_verdict(max_diff, 0.01, "stable"),
+      target_moments = .moment_verdict(max_target_diff, 0.01, "close")
+    )
+  )
 
   if (isTRUE(check_joint) && length(cov_names) >= 2L) {
+    # Measure the realized correlation on the method that defined the target,
+    # and put a caller-supplied matrix in covariate order first.
+    cor_target <- if (is.null(cor)) {
+      data$int_cor
+    } else {
+      .validate_integration_cor(cor, length(cov_names), cov_names = cov_names)
+    }
+    target_method <- cor_adjust %||% data$int_cor_adjust %||% "pearson"
+    # A latent matrix under `cor_adjust = "none"` is not what the realized
+    # covariate-scale correlation estimates, so it is not compared.
+    latent_target <- identical(target_method, "none")
+    if (latent_target) {
+      target_method <- "pearson"
+      cor_target <- NULL
+    }
     cor_result <- .int_cor_stats(X_orig, X_double, cov_names, n_agd,
-                                 cor_target = cor)
-    max_cor_diff <- max(cor_result$diff$abs_diff, na.rm = TRUE)
+                                 cor_target = cor_target,
+                                 cor_method = target_method)
+    # The maxima run over the pairs with a correlation to realize; the rest
+    # are counted and named.
+    pairs <- .int_cor_pair_status(cor_result$diff, stats_orig, target_sd)
+    applicable <- cor_result$diff[pairs$applicable, , drop = FALSE]
+    max_cor_diff <- .max_finite(applicable$abs_diff)
+    max_target_cor_diff <- if (is.null(cor_target)) NA_real_ else
+      .max_finite(applicable$abs_diff_target)
     if (verbose) {
-      cat(sprintf("Joint -- max |cor(current) - cor(doubled)|: %.4f\n",
-                  max_cor_diff))
-      if (max_cor_diff > 0.05) {
-        cat("WARN: pairwise correlations differ by > 0.05 between resolutions.\n")
+      if (is.na(max_cor_diff)) {
+        cat("Joint resolution: not available (no finite comparison).\n")
       } else {
-        cat("OK joint: pairwise correlations agree within 0.05.\n")
+        cat(sprintf("Joint: max |cor(current) - cor(doubled)|: %.4f\n",
+                    max_cor_diff))
+        if (max_cor_diff > 0.05) {
+          cat("Warning: pairwise correlations differ by > 0.05 between resolutions.\n")
+        } else {
+          cat("Joint resolution stable within the package's 0.05 heuristic.\n")
+        }
       }
-      if (!is.null(cor)) {
-        cat(sprintf("Target -- max |cor(doubled) - cor_target|: %.4f\n",
-                    max(cor_result$diff$abs_diff_target, na.rm = TRUE)))
+      if (latent_target) {
+        cat("Target correlation: not compared. `cor_adjust = \"none\"` declares",
+            "a latent Gaussian-copula matrix, which the realized covariate-scale",
+            "correlation does not estimate.\n")
+      } else if (!is.null(cor_target) && !is.na(max_target_cor_diff)) {
+        cat(sprintf("Target (%s): max |cor(doubled) - cor_target|: %.4f\n",
+                    target_method, max_target_cor_diff))
+      } else if (!is.null(cor_target)) {
+        cat("Target correlation: not available (no finite comparison).\n")
+      }
+      if (nrow(pairs$omitted)) {
+        cat(sprintf(paste0("Pairs measured: %d of %d on the doubled grid, %d ",
+                           "of %d between resolutions. Not measured: %s. ",
+                           "A maximum above is over the measured pairs ",
+                           "only.\n"),
+                    pairs$measured, pairs$expected,
+                    pairs$measured_resolution, pairs$expected,
+                    paste(sprintf("%s (row %d, %s)", pairs$omitted$pair,
+                                  pairs$omitted$agd_row,
+                                  pairs$omitted$reason),
+                          collapse = "; ")))
+      }
+      if (nrow(pairs$not_applicable)) {
+        cat(sprintf(paste0("Pairs with a margin declared without variance, ",
+                           "which have no correlation to realize: %s.\n"),
+                    paste(sprintf("%s (row %d)", pairs$not_applicable$pair,
+                                  pairs$not_applicable$agd_row),
+                          collapse = "; ")))
       }
     }
+    # `partial`: the measured pairs passed and some pair was not measured.
+    qualify <- function(verdict, pass, measured) {
+      if (identical(verdict, pass) && measured < pairs$expected) {
+        "partial"
+      } else {
+        verdict
+      }
+    }
+    out$verdict$target_correlation <- if (is.null(cor_target)) {
+      "unavailable"
+    } else {
+      qualify(.moment_verdict(max_target_cor_diff, 0.05, "close"), "close",
+              pairs$measured)
+    }
+    out$verdict$resolution_correlation <- qualify(
+      .moment_verdict(max_cor_diff, 0.05, "stable"), "stable",
+      pairs$measured_resolution
+    )
     out$correlations <- cor_result$diff
+    out$correlation_pairs <- pairs
   }
 
   invisible(out)
@@ -498,8 +758,9 @@ check_integration <- function(data, ..., cor = NULL, cor_adjust = NULL,
 
 
 #' Pairwise-correlation diagnostics for integration points
-#' @keywords internal
-.int_cor_stats <- function(X_orig, X_double, cov_names, n_agd, cor_target = NULL) {
+#' @noRd
+.int_cor_stats <- function(X_orig, X_double, cov_names, n_agd, cor_target = NULL,
+                           cor_method = "pearson") {
   K <- length(cov_names)
   pairs <- utils::combn(seq_len(K), 2, simplify = FALSE)
   rows <- vector("list", length(pairs) * n_agd)
@@ -511,8 +772,9 @@ check_integration <- function(data, ..., cor = NULL, cor_adjust = NULL,
     dim(Xd) <- dim(X_double)[2:3]
     colnames(Xo) <- cov_names
     colnames(Xd) <- cov_names
-    cor_o <- stats::cor(Xo)
-    cor_d <- stats::cor(Xd)
+    # Measured on the method the target was measured on.
+    cor_o <- suppressWarnings(stats::cor(Xo, method = cor_method))
+    cor_d <- suppressWarnings(stats::cor(Xd, method = cor_method))
     for (ij in pairs) {
       i <- ij[[1L]]
       j <- ij[[2L]]
@@ -521,7 +783,11 @@ check_integration <- function(data, ..., cor = NULL, cor_adjust = NULL,
       rho_t <- if (!is.null(cor_target)) cor_target[i, j] else NA_real_
       rows[[idx]] <- data.frame(
         agd_row = k,
+        # `pair` is a label; `covariate_1` and `covariate_2` identify the members.
+        covariate_1 = cov_names[i],
+        covariate_2 = cov_names[j],
         pair = sprintf("%s~%s", cov_names[i], cov_names[j]),
+        cor_method = cor_method,
         cor_current = round(rho_o, 4),
         cor_doubled = round(rho_d, 4),
         cor_target = round(rho_t, 4),
@@ -536,8 +802,46 @@ check_integration <- function(data, ..., cor = NULL, cor_adjust = NULL,
 }
 
 
+#' Which correlation pairs were measured, and why the others were not
+#'
+#' @param diff The pair table from [.int_cor_stats()].
+#' @param stats The marginal statistics of the current grid.
+#' @param target_sd Declared target SDs, one per row of `stats`.
+#' @return List with `expected` (pairs that have a correlation to realize),
+#'   `measured` and `measured_resolution` (how many had a finite correlation on
+#'   the doubled grid, and on both grids), `omitted` (the expected pairs that
+#'   fell short, with a reason), `not_applicable` (pairs in which a margin is
+#'   declared with no variance) and `applicable`, the logical vector the
+#'   maxima are taken over.
+#' @noRd
+.int_cor_pair_status <- function(diff, stats, target_sd) {
+  degenerate <- vapply(seq_len(nrow(diff)), function(i) {
+    members <- c(diff$covariate_1[i], diff$covariate_2[i])
+    rows <- stats$covariate %in% members & stats$agd_row == diff$agd_row[i]
+    any(is.finite(target_sd[rows]) & target_sd[rows] == 0)
+  }, logical(1))
+  applicable <- !degenerate
+  measured <- applicable & is.finite(diff$cor_doubled)
+  measured_resolution <- applicable & is.finite(diff$abs_diff)
+  short <- applicable & !(measured & measured_resolution)
+  omitted <- diff[short, c("agd_row", "pair"), drop = FALSE]
+  omitted$reason <- ifelse(measured[short], "constant_on_current_grid",
+                           "constant_on_grid")
+  rownames(omitted) <- NULL
+  not_applicable <- diff[degenerate, c("agd_row", "pair"), drop = FALSE]
+  rownames(not_applicable) <- NULL
+  list(expected = sum(applicable), measured = sum(measured),
+       measured_resolution = sum(measured_resolution), omitted = omitted,
+       not_applicable = not_applicable, applicable = applicable)
+}
+
+
 #' Compute summary statistics for integration points
-#' @keywords internal
+#'
+#' The SD is the population one: the grid represents a distribution rather
+#' than sampling it, and a sample SD carries a `sqrt(m / (m - 1))` factor
+#' that no target shares.
+#' @noRd
 .int_stats <- function(X_int, cov_names, n_agd) {
   rows <- vector("list", n_agd * length(cov_names))
   idx <- 1
@@ -546,11 +850,34 @@ check_integration <- function(data, ..., cor = NULL, cor_adjust = NULL,
       vals <- X_int[k, , j]
       rows[[idx]] <- data.frame(
         covariate = cov_names[j], agd_row = k,
-        mean = mean(vals), sd = sd(vals),
+        mean = mean(vals), sd = sqrt(mean((vals - mean(vals))^2)),
         stringsAsFactors = FALSE
       )
       idx <- idx + 1
     }
   }
   do.call(rbind, rows)
+}
+
+
+#' Largest finite value, or NA when there is none
+#'
+#' `max(x, na.rm = TRUE)` returns `-Inf` for an all-missing vector.
+#' @noRd
+.max_finite <- function(x) {
+  x <- x[is.finite(x)]
+  if (length(x) == 0L) NA_real_ else max(x)
+}
+
+
+#' Turn a difference into a verdict, keeping "not measured" distinct from "close"
+#' @noRd
+.moment_verdict <- function(value, threshold, pass) {
+  if (is.na(value)) {
+    "unavailable"
+  } else if (value <= threshold) {
+    pass
+  } else {
+    "review"
+  }
 }

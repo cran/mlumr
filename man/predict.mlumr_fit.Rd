@@ -7,9 +7,11 @@
 \method{predict}{mlumr_fit}(
   object,
   population = c("both", "index", "comparator"),
-  type = c("response", "link"),
+  type = NULL,
   summary = TRUE,
   probs = c(0.025, 0.5, 0.975),
+  times = NULL,
+  newdata = NULL,
   ...
 )
 }
@@ -18,23 +20,56 @@
 
 \item{population}{Which population: \code{"both"}, \code{"index"}, or \code{"comparator"}}
 
-\item{type}{Prediction type: \code{"response"} or \code{"link"}. For \code{"response"}:
-probabilities (binomial), means (normal), or rates (poisson). For
-\code{"link"}: mean linear predictor on the fitted link scale (logit, probit,
-cloglog, log, or identity). The link-scale values are computed directly
-from parameter draws as \code{E[eta]}, not as \code{link(E[g^{-1}(eta)])}, to
-avoid Jensen's inequality bias.}
+\item{type}{Prediction type. For binomial/normal/poisson: \code{"response"}
+(default) or \code{"link"}. For survival: \code{"survival"} (default), \code{"hazard"},
+\code{"cumhaz"}, \code{"rmst"} (restricted mean survival time), \code{"median"} (median
+survival, obtained by linear interpolation on the fitted \code{pred_times} grid;
+if the true median precedes the first grid point it is interpolated between
+the known exact point \code{S(0) = 1} and \verb{(pred_times[1], S(pred_times[1]))},
+so it is never reported as later than the first grid time, though a denser
+\code{pred_times} near zero still resolves very early medians better), or
+\code{"loghr"} (time-varying marginal log hazard ratio of
+index vs comparator at each fitted time, per population). For \code{"response"}:
+probabilities (binomial), means
+(normal), or rates (poisson). For \code{"link"}: the fitted link applied to the
+population-standardized response mean, \code{g(E[g^{-1}(eta)])}. This is the
+marginal link-scale prediction used by G-computation; it is generally not
+the mean conditional linear predictor \code{E[eta]}.}
 
 \item{summary}{Return summary statistics (\code{TRUE}) or full posterior draws (\code{FALSE})}
 
 \item{probs}{Quantiles for summary (default \code{c(0.025, 0.5, 0.975)})}
 
+\item{times}{For survival fits, an optional vector of times at which to
+report curve predictions; each is matched to the nearest fitted
+\code{pred_times} grid point. If \code{NULL}, all fitted times are returned.
+
+When supplied, the result has one row per requested time for each
+treatment and population cell, in the order requested and including
+repeats, with a \code{requested_time} column beside \code{time}. With \code{summary = FALSE} the mapping is carried as the
+\code{requested_time} and \code{used_time} attributes instead, one entry per time
+column. Refit with \code{pred_times} containing the exact times to avoid the
+approximation.}
+
+\item{newdata}{Optional data frame of covariate profiles defining an arbitrary
+\strong{target population}. When supplied, per-treatment absolute predictions are
+standardized to this population by g-computation (averaging model-based
+predictions over the rows at each posterior draw), and \code{population} is
+ignored. Supports \code{type = "response"}/\code{"link"} (binomial/normal/poisson) and
+\code{type = "survival"}/\code{"hazard"}/\code{"cumhaz"}/\code{"rmst"}/\code{"median"}/\code{"loghr"}
+(survival). Rows outside the fitted covariate support are model-based
+extrapolation; overlap is not checked.}
+
 \item{...}{Additional arguments (unused)}
 }
 \value{
-A data frame with predictions. When \code{type = "link"}, values are
-mean linear predictors computed directly from parameter draws (avoiding
-Jensen's inequality bias).
+A data frame with predictions. \code{type = "rmst"} adds a \code{horizon}
+column with the restriction time actually integrated to, since RMST at
+different horizons is a different estimand. The plot methods require
+\code{summary = TRUE}; with \code{summary = FALSE} the raw posterior draws are
+returned as a plain data frame. For \code{type = "median"} the summary is
+conditional on the median being reached, and \code{p_not_reached} gives the
+posterior probability that it is not.
 }
 \description{
 Generate population-average absolute-outcome predictions in the index and
@@ -42,17 +77,20 @@ comparator populations.
 }
 \details{
 \strong{Marginalization on non-identity links.} For \code{type = "response"} the
-reported values are \code{E[g^{-1}(eta)]} — the posterior expectation of the
-inverse-link-transformed linear predictor — \emph{not} \code{g^{-1}(E[eta])}. The
-two differ whenever \code{g} is non-linear (logit, probit, cloglog, log) by
-Jensen's inequality. In the index population the expectation is taken
-over IPD individuals; in the comparator population it is taken over the
-integration points constructed by \code{\link[=add_integration]{add_integration()}} from the AgD
-moments. This is the correct population-average prediction for an
-individual randomly drawn from that population, and it matches what the
-Stan \verb{generated quantities} block computes. For the link scale
-(\code{type = "link"}) the reported value is \code{E[eta]}, a linear functional,
-and the two interpretations coincide.
+reported values are \code{E[g^{-1}(eta)]}, the population-average prediction
+for an individual drawn from that population, not \code{g^{-1}(E[eta])}; the
+expectation runs over the IPD individuals for the index population and
+over the integration points for the comparator one. \code{type = "link"}
+applies the fitted link after that marginalization.
+}
+\examples{
+\dontrun{
+# Absolute predictions for both populations:
+predict(fit, population = "both")
+# Survival RMST, and transport to a target covariate distribution:
+predict(fit, type = "rmst")
+predict(fit, newdata = target_population)
+}
 }
 \seealso{
 \code{\link[=marginal_effects]{marginal_effects()}} for treatment-effect summaries;

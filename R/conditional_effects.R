@@ -14,6 +14,20 @@
 #'   `"rd"`, or `"rr"`. For normal: `"all"` or `"md"`. For Poisson: `"all"`
 #'   or `"rr"`. The legacy value `"lor"` is accepted as an alias for
 #'   `"link_effect"` when the fitted link is logit.
+#'
+#'   For **survival**, `exp(eta_index - eta_comparator)` is a conditional
+#'   hazard ratio (`"hr"`, proportional-hazards distributions) or time ratio
+#'   (`"tr"`, accelerated failure time distributions) only when the two
+#'   studies share a baseline shape (`aux_by = "none"`, or any exponential
+#'   fit). The two are different measures: `"tr"` on a proportional-hazards
+#'   fit and `"hr"` on an AFT fit are errors, whose message gives the
+#'   conversion where one exists (`TR = HR^(-1/shape)` for a Weibull, applied
+#'   draw by draw; `TR = 1/HR` for an exponential). Under the default
+#'   study-specific shapes an explicit `"hr"` or `"tr"` is an error, since
+#'   the baseline ratio does not cancel; `"all"` returns the contrast under
+#'   the label `"EXP_ETA_CONTRAST"` with a warning. The RMST effects from
+#'   [marginal_effects()] are the recommended alternative, and
+#'   `predict(type = "loghr")` gives the population-standardized curve.
 #' @param summary Return summary statistics (`TRUE`) or full posterior draws
 #'   (`FALSE`)
 #' @param probs Quantiles for summary (default `c(0.025, 0.5, 0.975)`)
@@ -27,21 +41,15 @@
 #' covariate values because the index and comparator treatments have different
 #' regression coefficients.
 #'
-#' The conditional link-scale effect is computed directly as
-#' `eta_index - eta_comparator`. This avoids numerical distortion from
-#' transforming extreme response-scale probabilities back through the link
-#' function.
-#'
-#' **Conditional vs marginal on non-identity links.** Conditional effects are
-#' evaluated at a single covariate profile, so there is no averaging over a
-#' population and no Jensen's-inequality gap between the conditional and
-#' marginal response. Compare with [marginal_effects()] and
-#' [predict.mlumr_fit()], which average over either the IPD individuals
-#' (index population) or the AgD integration points (comparator population)
-#' and therefore return `E[g^{-1}(eta)]`, not `g^{-1}(E[eta])`.
+#' For binomial, normal and Poisson the conditional link-scale effect is
+#' `eta_index - eta_comparator`; for survival the contrast is exponentiated
+#' (null 1) and labeled `"EXP_ETA_CONTRAST"` when the baseline shapes
+#' differ. A conditional effect is evaluated at one profile, so unlike
+#' [marginal_effects()] and [predict.mlumr_fit()] there is no averaging over
+#' a population and no gap between `E[g^{-1}(eta)]` and `g^{-1}(E[eta])`.
 #'
 #' @return A data frame. If `summary = TRUE`, contains columns `profile`,
-#'   `effect`, `mean`, `sd`, and quantile columns. If `summary = FALSE`,
+#'   `effect`, `mean`, `sd` and quantile columns. If `summary = FALSE`,
 #'   returns a single combined data frame of full posterior draws with a
 #'   `profile` column indicating which covariate profile each draw belongs
 #'   to.
@@ -70,7 +78,7 @@ conditional_effects <- function(object,
 
   .validate_mlumr_fit_object(object)
   effect <- .validate_effect_choice(effect)
-  summary <- .validate_summary_flag(summary)
+  summary <- .validate_flag(summary, "summary")
   .validate_probs(probs)
 
   family <- object$family %||% "binomial"
@@ -93,6 +101,38 @@ conditional_effects <- function(object,
     stop(sprintf("For %s family, `effect` must be one of: %s",
                  family, paste(valid_effects, collapse = ", ")), call. = FALSE)
   }
+  # Only one of `hr` and `tr` exists as a scalar for a given fit.
+  if (identical(family, "survival") && effect %in% c("hr", "tr")) {
+    is_ph <- isTRUE(object$surv_info$is_ph)
+    dist <- object$distribution %||% "survival"
+    # The stratified case answers first: its refusal does not presume one shape.
+    if (.aux_shapes_differ(object)) {
+      stop("`effect = \"", effect, "\"` is not available: each study has its own ",
+           "baseline ", if (is_ph) "hazard" else "shape",
+           " (`aux_by = \".study\"`), so exp(eta_index - eta_comparator) is not ",
+           "a conditional ", if (is_ph) "hazard ratio" else "time ratio",
+           ". Use `effect = \"all\"` for the contrast under its own name, ",
+           "predict(type = \"loghr\") for the time-varying hazard ratio, or ",
+           "refit with `aux_by = \"none\"`.",
+           call. = FALSE)
+    }
+    if (is_ph && identical(effect, "tr")) {
+      stop("`effect = \"tr\"` is not what this fit parameterizes. This is a ",
+           "proportional-hazards '", dist,
+           "' fit, so the coefficient it estimates is a log hazard ratio and ",
+           "`effect = \"hr\"` is what returns it. ",
+           .dual_family_note(dist, "tr"),
+           call. = FALSE)
+    }
+    if (!is_ph && identical(effect, "hr")) {
+      stop("`effect = \"hr\"` is not what this fit parameterizes. This is an ",
+           "accelerated failure time '", dist,
+           "' fit, so the coefficient it estimates is a log time ratio and ",
+           "`effect = \"tr\"` is what returns it. ",
+           .dual_family_note(dist, "hr"),
+           call. = FALSE)
+    }
+  }
 
   profiles <- .conditional_profiles(object, newdata)
   X <- profiles$X
@@ -100,18 +140,41 @@ conditional_effects <- function(object,
   params <- .conditional_parameters(object, profiles$covariates)
   results <- vector("list", n_profiles)
 
+  # Resolved once: the contrast type does not depend on the profile.
+  if (.aux_shapes_differ(object)) {
+    why <- if (isTRUE(object$surv_info$is_ph)) {
+      paste0("the conditional hazard ratio varies with time and the ",
+             "reported exp(eta_index - eta_comparator) is not it: the ",
+             "baseline ratio h0_index(t) / h0_comparator(t) does not cancel")
+    } else {
+      paste0("the conditional time ratio depends on the survival quantile ",
+             "and the reported exp(eta_index - eta_comparator) is not it: ",
+             "differing shapes add quantile-dependent factors (the Weibull ",
+             "[-log S]^(1/a_i - 1/a_c), the log-normal ",
+             "exp(z_p (sigma_i - sigma_c)), and so on) that do not cancel")
+    }
+    warning("Each study has its own baseline ",
+            if (isTRUE(object$surv_info$is_ph)) "hazard" else "shape",
+            " (`aux_by = \".study\"`, the default), so ", why,
+            ". RMST effects from marginal_effects() remain available, and ",
+            "`aux_by = \"none\"` makes this contrast exact. predict(type = ",
+            "\"loghr\") is a population-standardized MARGINAL curve, not the ",
+            "conditional effect at this profile.",
+            call. = FALSE)
+  }
+
   for (i in seq_len(n_profiles)) {
     eta <- .conditional_eta(params, X[i, , drop = FALSE])
     eta_idx <- eta$index
     eta_cmp <- eta$comparator
 
     if (family == "binomial") {
-      p_idx <- inverse_link(eta_idx, lnk)
-      p_cmp <- inverse_link(eta_cmp, lnk)
+      logp_idx <- .binary_log_probs(eta_idx, lnk)$event
+      logp_cmp <- .binary_log_probs(eta_cmp, lnk)$event
       profile_draws <- data.frame(
         link_effect = eta_idx - eta_cmp,
-        rd = p_idx - p_cmp,
-        rr = .safe_positive_ratio(p_idx, p_cmp)
+        rd = .exp_difference_logs(logp_idx, logp_cmp),
+        rr = exp(logp_idx - logp_cmp)
       )
     } else if (family == "normal") {
       if (lnk == "identity") {
@@ -119,16 +182,19 @@ conditional_effects <- function(object,
           md = eta_idx - eta_cmp
         )
       } else {
-        val_idx <- inverse_link(eta_idx, lnk)
-        val_cmp <- inverse_link(eta_cmp, lnk)
         profile_draws <- data.frame(
-          md = val_idx - val_cmp
+          md = .exp_difference_logs(eta_idx, eta_cmp)
         )
       }
-    } else {
+    } else if (family == "poisson") {
       profile_draws <- data.frame(
         rr = exp(eta_idx - eta_cmp)
       )
+    } else {
+      # Survival: natural scale, null 1, named hr or tr only when the shapes
+      # are shared and exp_eta_contrast otherwise.
+      profile_draws <- data.frame(value = exp(eta_idx - eta_cmp))
+      names(profile_draws) <- .surv_contrast_name(object)
     }
 
     results[[i]] <- profile_draws
@@ -139,8 +205,10 @@ conditional_effects <- function(object,
     keep_cols <- if (effect == "all") c("link_effect", "rd", "rr") else effect
   } else if (family == "normal") {
     keep_cols <- "md"
-  } else {
+  } else if (family == "poisson") {
     keep_cols <- "rr"
+  } else {
+    keep_cols <- .surv_contrast_name(object)
   }
 
   if (!summary) {
@@ -152,23 +220,77 @@ conditional_effects <- function(object,
     return(do.call(rbind, out))
   }
 
-  summary_list <- lapply(seq_along(results), function(i) {
-    d <- results[[i]][, keep_cols, drop = FALSE]
-    summary_df <- .summarize_draw_matrix(d, probs)
+  kept <- lapply(results, function(r) r[, keep_cols, drop = FALSE])
+  .warn_dropped_draws(do.call(cbind, kept))
+  summary_list <- lapply(seq_along(kept), function(i) {
+    summary_df <- .summarize_draw_matrix(kept[[i]], probs, warn = FALSE)
     summary_df$profile <- i
     summary_df$effect <- toupper(rownames(summary_df))
     summary_df
   })
 
   out <- do.call(rbind, summary_list)
-  out <- out[, c("profile", "effect", "mean", "sd",
-                 paste0("q", probs * 100)), drop = FALSE]
+  out <- out[, c("profile", "effect", "mean", "sd", .quantile_names(probs)),
+             drop = FALSE]
   rownames(out) <- NULL
-  out
+  .mlumr_result(out, "mlumr_conditional_effects", family = family)
+}
+
+#' Say whether the unrequested measure exists as a scalar for this family
+#'
+#' The exponential and the Weibull are both proportional hazards and AFT, so
+#' with a shared shape the other measure is a deterministic transform; the
+#' log-normal, log-logistic, gamma and generalized gamma have a time-varying
+#' hazard ratio, where no scalar exists.
+#'
+#' @param dist The fitted distribution.
+#' @param asked The measure the caller asked for, `"hr"` or `"tr"`.
+#' @return A single string to append to the error message.
+#' @noRd
+.dual_family_note <- function(dist, asked) {
+  dual <- c("exponential", "weibull", "exponential-aft", "weibull-aft")
+  if (dist %in% dual) {
+    common <- paste0(
+      "This distribution is both proportional-hazards and accelerated ",
+      "failure time, so with a baseline shape shared across arms the other ",
+      "measure is a deterministic transform of this one: "
+    )
+    # The exponential has NO shape parameter, so the paired-draw and
+    # transformed-prior advice below does not apply to it: its conversion is a
+    # reciprocal, and applying it to each draw is all there is to do.
+    if (grepl("^exponential", dist)) {
+      return(paste0(
+        common, "TR = 1/HR for an exponential. ",
+        "The exponential carries no shape parameter, so apply that to each ",
+        "draw; there is nothing further to pair it with, and a normal prior ",
+        "on log(HR) is the same normal prior on log(TR) with its sign ",
+        "reversed."
+      ))
+    }
+    return(paste0(
+      common, "TR = HR^(-1/shape) for a Weibull. ",
+      "Convert DRAW BY DRAW, pairing each effect draw with the shape draw it ",
+      "was sampled with: the shape is uncertain, and transforming a posterior ",
+      "mean or the endpoints of a reported interval with a single shape ",
+      "estimate does not reproduce the posterior of the other measure. ",
+      "Refitting in the other parameterization is an equivalent analysis only ",
+      "if the priors are transformed to match, since a normal prior on ",
+      "log(HR) induces one on log(TR) whose scale depends on the shape."
+    ))
+  }
+  if (identical(asked, "hr")) {
+    return(paste0(
+      "For this distribution the conditional hazard ratio generally varies ",
+      "with time, so there is no scalar to convert to. Use ",
+      "predict(type = \"loghr\") for the population-standardized ",
+      "time-varying hazard ratio."
+    ))
+  }
+  "For this distribution there is no constant time ratio to convert to."
 }
 
 #' Build covariate profiles for conditional summaries
-#' @keywords internal
+#' @noRd
 .conditional_profiles <- function(object, newdata = NULL) {
   covariates <- object$data$covariates
 
@@ -207,6 +329,10 @@ conditional_effects <- function(object,
     stop("`newdata` covariates must be finite.", call. = FALSE)
   }
 
+  # Onto the centered scale used at fit time (zeros when center = FALSE).
+  cov_center <- object$stan_data$cov_center %||% rep(0, length(covariates))
+  X <- sweep(X, 2, cov_center)
+
   list(
     X = X,
     covariates = covariates
@@ -214,7 +340,7 @@ conditional_effects <- function(object,
 }
 
 #' Extract posterior parameter draws for conditional summaries
-#' @keywords internal
+#' @noRd
 .conditional_parameters <- function(object, covariates) {
   draws <- object$draws
   n_cov <- length(covariates)
@@ -251,7 +377,7 @@ conditional_effects <- function(object,
 }
 
 #' Compute conditional linear predictors for one profile
-#' @keywords internal
+#' @noRd
 .conditional_eta <- function(params, x) {
   if (params$is_relaxed) {
     eta_idx <- params$mu_index + as.vector(params$beta_index %*% t(x))
@@ -266,23 +392,18 @@ conditional_effects <- function(object,
 }
 
 #' Conditional effect choices by family
-#' @keywords internal
+#' @noRd
 .conditional_effect_choices <- function(family) {
   if (family == "binomial") {
     c("all", "link_effect", "rd", "rr")
   } else if (family == "normal") {
     c("all", "md")
-  } else {
+  } else if (family == "poisson") {
     c("all", "rr")
+  } else {
+    c("all", "hr", "tr")
   }
 }
-
-#' Ratio with the same positive-denominator guard used by Stan generated quantities
-#' @keywords internal
-.safe_positive_ratio <- function(num, denom) {
-  num / pmax(denom, 1e-10)
-}
-
 
 #' Conditional predictions
 #'
@@ -293,11 +414,17 @@ conditional_effects <- function(object,
 #' @param newdata Data frame of covariate values. If `NULL`, uses IPD covariate
 #'   means.
 #' @param type `"response"` for probabilities, means, or rates; `"link"` for
-#'   the fitted linear-predictor scale.
+#'   the fitted linear-predictor scale. `NULL`, the default, resolves to
+#'   `"response"` for binomial, normal and Poisson fits. Ignored for survival
+#'   fits, which return the conditional survival probability S(t | x) at each
+#'   fitted prediction time.
 #' @param summary Return summary (`TRUE`) or full draws (`FALSE`)
 #' @param probs Quantiles for summary
 #'
-#' @return A data frame with predictions for each treatment at each profile
+#' @return A data frame with predictions for each treatment at each profile.
+#'   For survival fits the summary has one row per profile, treatment, and
+#'   time; with `summary = FALSE` the draws are rows and the prediction times
+#'   are `t_*` columns.
 #' @seealso [conditional_effects()] for covariate-conditional treatment
 #'   *effects*; [predict.mlumr_fit()] for population-level predictions.
 #' @export
@@ -309,24 +436,29 @@ conditional_effects <- function(object,
 #' }
 conditional_predict <- function(object,
                                 newdata = NULL,
-                                type = c("response", "link"),
+                                type = NULL,
                                 summary = TRUE,
                                 probs = c(0.025, 0.5, 0.975)) {
 
   .validate_mlumr_fit_object(object)
-  type <- .validate_predict_choice(type, c("response", "link"), "type")
-  summary <- .validate_summary_flag(summary)
+  summary <- .validate_flag(summary, "summary")
   .validate_probs(probs)
 
+  family <- object$family %||% "binomial"
+  if (family == "survival") {
+    return(.conditional_predict_survival(object, newdata, summary, probs))
+  }
+
+  type <- .validate_choice(type %||% "response", c("response", "link"),
+                           "type")
   profiles <- .conditional_profiles(object, newdata)
   X <- profiles$X
   n_profiles <- nrow(X)
   params <- .conditional_parameters(object, profiles$covariates)
-  family <- object$family %||% "binomial"
   lnk <- object$link %||% get_family_config(family)$link_default
 
-  summarize_col <- function(x) .summarize_draw_vector(x, probs)
-
+  # Dropped draws are reported once for the whole set, after the loop.
+  drawn <- list()
   results <- vector("list", n_profiles)
 
   for (i in seq_len(n_profiles)) {
@@ -349,9 +481,10 @@ conditional_predict <- function(object,
         comparator = val_cmp
       )
     } else {
-      s_idx <- summarize_col(val_idx)
-      s_cmp <- summarize_col(val_cmp)
-      qcols <- paste0("q", probs * 100)
+      drawn[[length(drawn) + 1L]] <- cbind(val_idx, val_cmp)
+      s_idx <- .summarize_draw_vector(val_idx, probs, warn = FALSE)
+      s_cmp <- .summarize_draw_vector(val_cmp, probs, warn = FALSE)
+      qcols <- .quantile_names(probs)
 
       results[[i]] <- data.frame(
         profile = c(i, i),
@@ -364,13 +497,338 @@ conditional_predict <- function(object,
       )
       for (j in seq_along(probs)) {
         qname <- qcols[j]
-        pname <- paste0(probs[j] * 100, "%")
-        results[[i]][[qname]] <- c(s_idx[pname], s_cmp[pname])
+        results[[i]][[qname]] <- c(s_idx[[qname]], s_cmp[[qname]])
       }
     }
   }
+  if (summary) .warn_dropped_draws(do.call(cbind, drawn))
 
   out <- do.call(rbind, results)
   rownames(out) <- NULL
+  out
+}
+
+
+#' Conditional survival predictions S(t | x) at covariate profiles
+#'
+#' Internal dispatch for [conditional_predict()] on survival fits. Returns the
+#' conditional survival probability for each treatment at each profile and
+#' fitted prediction time. Conditional hazard and RMST are well-defined, but
+#' this helper currently returns survival only; use [predict.mlumr_fit()] for
+#' population-standardized hazard and RMST summaries.
+#' @noRd
+.conditional_predict_survival <- function(object, newdata, summary, probs) {
+  profiles <- .conditional_profiles(object, newdata)
+  X <- profiles$X
+  n_profiles <- nrow(X)
+  params <- .conditional_parameters(object, profiles$covariates)
+  pred_times <- object$pred_times
+  idx_trt <- object$data$index_treatment
+  cmp_trt <- object$data$comparator_treatment
+
+  drawn <- list()
+  rows <- list()
+  for (i in seq_len(n_profiles)) {
+    eta <- .conditional_eta(params, X[i, , drop = FALSE])
+    cells <- list(
+      list(trt = idx_trt, mat = .surv_eval_curve(object, eta$index, "index")),
+      list(trt = cmp_trt,
+           mat = .surv_eval_curve(object, eta$comparator, "comparator"))
+    )
+    for (cell in cells) {
+      if (!summary) {
+        df <- as.data.frame(cell$mat)
+        colnames(df) <- sprintf("t_%.15g", pred_times)
+        df$profile <- i
+        df$treatment <- cell$trt
+        rows[[length(rows) + 1L]] <- df
+      } else {
+        drawn[[length(drawn) + 1L]] <- cell$mat
+        sm <- .summarize_draw_matrix(cell$mat, probs, warn = FALSE)
+        rows[[length(rows) + 1L]] <- data.frame(
+          profile = i, treatment = cell$trt, time = pred_times, sm,
+          row.names = NULL
+        )
+      }
+    }
+  }
+  if (summary) .warn_dropped_draws(do.call(cbind, drawn))
+
+  out <- do.call(rbind, rows)
+  rownames(out) <- NULL
+  out
+}
+
+
+#' Name for the conditional survival contrast
+#'
+#' `exp(eta_index - eta_comparator)` is a hazard ratio or time ratio only
+#' when the two studies' shape parameters agree. An exponential has no shape
+#' to stratify, so `aux_by = ".study"` leaves its label exact.
+#' @param object An `mlumr_fit` (survival).
+#' @return `"hr"`, `"tr"`, or `"exp_eta_contrast"` when the two baselines'
+#'   shape/scale parameters differ.
+#' @noRd
+.surv_contrast_name <- function(object) {
+  if (.aux_shapes_differ(object)) return("exp_eta_contrast")
+  if (isTRUE(object$surv_info$is_ph)) "hr" else "tr"
+}
+
+#' Evaluate the conditional survival curve S(t | profile) per posterior draw
+#'
+#' @param object An `mlumr_fit` (survival).
+#' @param eta Numeric vector (length n_draws) of the per-draw linear predictor
+#'   at one covariate profile for one treatment.
+#' @param treatment Which arm's baseline hazard to evaluate against. With
+#'   `aux_by = ".study"` (the default) each study has its own baseline, so the
+#'   curve depends on which arm is being predicted.
+#' @return A matrix of survival probabilities, draws (rows) by fitted
+#'   prediction times (columns).
+#' @noRd
+.surv_eval_curve <- function(object, eta,
+                             treatment = c("index", "comparator")) {
+  treatment <- match.arg(treatment)
+  pred_times <- object$pred_times
+
+  # The baseline belongs to the study, so it travels with the treatment.
+  if (object$surv_info$kind == "parametric") {
+    dist <- object$surv_info$dist_code
+    aux  <- .surv_aux_draws(object, "aux_val", treatment, length(eta))
+    aux2 <- .surv_aux_draws(object, "aux2_val", treatment, length(eta))
+    # Shaped explicitly: vapply collapses to a vector for a single draw.
+    matrix(vapply(pred_times,
+                  function(t) exp(.r_log_surv(dist, t, eta, aux, aux2)),
+                  numeric(length(eta))),
+           nrow = length(eta), ncol = length(pred_times))
+  } else {
+    scoef <- .surv_scoef_draws(object, treatment)
+    # Each study has its own basis under `aux_by = ".study"`.
+    pred_ib <- if (identical(treatment, "comparator")) {
+      object$stan_data$pred_ibasis_cmp %||% object$stan_data$pred_ibasis
+    } else {
+      object$stan_data$pred_ibasis
+    }
+    cum_haz <- scoef %*% t(pred_ib)            # [n_draws, n_times]
+    exp(-exp(log(cum_haz) + eta))              # eta recycled down columns
+  }
+}
+
+
+#' Log upper regularized gamma from the log of its argument, in R
+#'
+#' Mirrors Stan's `log_gamma_surv_from_log_x()`. Below a `log_x` of -700,
+#' where `exp(log_x)` would underflow and `pgamma(0, k)` report survival 1,
+#' the lower tail is the exact leading series term `w^k / gamma(k + 1)` and
+#' the return is its log complement, `log(1 - w^k / gamma(k + 1))`. Every R site needing
+#' this quantity calls here, as every Stan site does.
+#'
+#' @param k Shape, recycled to the length of `log_x`.
+#' @param log_x Log of the incomplete-gamma argument.
+#' @return Log survival, the same length as `log_x`.
+#' @noRd
+.r_log_gamma_surv_from_log_x <- function(k, log_x) {
+  k <- rep_len(k, length(log_x))
+  out <- rep(NA_real_, length(log_x))
+  ok <- !is.na(log_x)
+  big <- ok & is.infinite(log_x) & log_x > 0
+  out[big] <- -Inf
+  small <- ok & !big & log_x < -700
+  if (any(small)) {
+    log_p <- pmin(k[small] * log_x[small] - lgamma(k[small] + 1), 0)
+    out[small] <- log(-expm1(log_p))
+  }
+  rest <- ok & !big & !small
+  if (any(rest)) {
+    out[rest] <- stats::pgamma(exp(log_x[rest]), shape = k[rest],
+                               lower.tail = FALSE, log.p = TRUE)
+  }
+  out
+}
+
+#' Log survival S(t | eta) in R, mirroring the Stan log_surv_scalar()
+#'
+#' Vectorized over posterior draws (`eta`, `aux`, `aux2` are vectors). `t` is
+#' usually a scalar time, but a vector recycled against the draws is also
+#' supported, which is how the likelihood tests evaluate several times at once.
+#' @noRd
+.r_log_surv <- function(dist, t, eta, aux, aux2) {
+  if (dist == 1L) return(-exp(log(t) + eta))
+  if (dist == 2L) return(-exp(aux * log(t) + eta))
+  if (dist == 3L) {
+    at <- aux * t
+    return(-exp(eta - log(aux) + at + log(-expm1(-at))))
+  }
+  if (dist == 4L) return(-exp(log(t) - eta))
+  if (dist == 5L) return(-exp(aux * (log(t) - eta)))
+  if (dist == 6L) {
+    return(stats::plnorm(t, meanlog = eta, sdlog = aux,
+                         lower.tail = FALSE, log.p = TRUE))
+  }
+  if (dist == 7L) {
+    z <- aux * (log(t) - eta)
+    return(-(pmax(z, 0) + log1p(exp(-abs(z)))))
+  }
+  if (dist == 8L) {
+    return(.r_log_gamma_surv_from_log_x(aux, log(t) - eta))
+  }
+  # Generalized gamma (dist 9): form the argument in log space.
+  q <- 1 / sqrt(aux2)
+  log_w <- q * (log(t) - eta) / aux + log(aux2)
+  .r_log_gamma_surv_from_log_x(aux2, log_w)
+}
+
+
+#' Log of the upper-incomplete-gamma continued-fraction factor
+#' @noRd
+.r_log_gamma_q_cf_factor <- function(k, x) {
+  tiny <- 1e-300
+  b <- x + 1 - k
+  c <- 1 / tiny
+  d <- 1 / b
+  h <- d
+  for (i in seq_len(300L)) {
+    an <- -i * (i - k)
+    b <- b + 2
+    d <- an * d + b
+    if (abs(d) < tiny) d <- tiny
+    c <- b + an / c
+    if (abs(c) < tiny) c <- tiny
+    d <- 1 / d
+    delta <- d * c
+    h <- h * delta
+    if (abs(delta - 1) < 1e-14) break
+  }
+  log(h)
+}
+
+
+#' Log hazard h(t | eta) in R, mirroring Stan log_haz_full()
+#' @noRd
+.r_log_haz <- function(dist, t, eta, aux, aux2) {
+  log_t <- log(t)
+  if (dist == 1L) return(eta)
+  if (dist == 2L) return(log(aux) + aux * log_t + eta - log_t)
+  if (dist == 3L) return(eta + aux * t)
+  if (dist == 4L) return(-eta)
+  if (dist == 5L) return(log(aux) + aux * (log_t - eta) - log_t)
+  if (dist == 6L) {
+    z <- (log_t - eta) / aux
+    log_mills <- stats::dnorm(z, log = TRUE) -
+      stats::pnorm(z, lower.tail = FALSE, log.p = TRUE)
+    tail <- z > 20
+    if (any(tail)) {
+      iz2 <- 1 / z[tail]^2
+      ratio <- 1 + iz2 * (1 + iz2 * (-2 + iz2 * (10 - 74 * iz2)))
+      log_mills[tail] <- log(z[tail]) + log(ratio)
+    }
+    return(log_mills - log(aux) - log_t)
+  }
+  if (dist == 7L) {
+    z <- aux * (log_t - eta)
+    return(log(aux) - log_t - (pmax(-z, 0) + log1p(exp(-abs(z)))))
+  }
+  if (dist == 8L) {
+    log_z <- log_t - eta
+    z <- exp(log_z)
+    a <- rep_len(aux, length(eta))
+    out <- numeric(length(eta))
+    infinite <- is.infinite(z)
+    tail <- !infinite & z > a + pmax(1, sqrt(a))
+    central <- !infinite & !tail
+    if (any(central)) {
+      log_s <- .r_log_gamma_surv_from_log_x(a[central], log_z[central])
+      out[central] <- (a[central] - 1) * log_z[central] - eta[central] -
+        z[central] - lgamma(a[central]) - log_s
+    }
+    if (any(tail)) {
+      out[tail] <- -log_t - mapply(.r_log_gamma_q_cf_factor,
+                                    a[tail], z[tail])
+    }
+    out[infinite] <- -eta[infinite]
+    return(out)
+  }
+
+  k <- rep_len(aux2, length(eta))
+  sigma <- rep_len(aux, length(eta))
+  z <- (1 / sqrt(k)) * (log_t - eta) / sigma
+  log_w <- log(k) + z
+  w <- exp(log_w)
+  out <- numeric(length(eta))
+  infinite <- is.infinite(w)
+  tail <- !infinite & w > k + pmax(1, sqrt(k))
+  central <- !infinite & !tail
+  if (any(central)) {
+    log_f <- -log(sigma[central]) - log_t -
+      0.5 * log(k[central]) * (1 - 2 * k[central]) +
+      k[central] * z[central] - w[central] - lgamma(k[central])
+    log_s <- .r_log_gamma_surv_from_log_x(k[central], log_w[central])
+    out[central] <- log_f - log_s
+  }
+  if (any(tail)) {
+    out[tail] <- -log(sigma[tail]) - log_t - 0.5 * log(k[tail]) -
+      mapply(.r_log_gamma_q_cf_factor, k[tail], w[tail])
+  }
+  out[infinite] <- -log(sigma[infinite]) - log_t +
+    0.5 * log(k[infinite]) + z[infinite]
+  out
+}
+
+
+#' Log density f(t | eta) in R, mirroring Stan log_density_scalar()
+#' @noRd
+.r_log_density <- function(dist, t, eta, aux, aux2) {
+  log_t <- log(t)
+  n <- length(eta)
+  a <- rep_len(aux, n)
+  a2 <- rep_len(aux2, n)
+
+  if (dist <= 5L) {
+    log_ch <- switch(
+      as.character(dist),
+      `1` = log_t + eta,
+      `2` = a * log_t + eta,
+      `3` = eta - log(a) + a * t + log(-expm1(-a * t)),
+      `4` = log_t - eta,
+      `5` = a * (log_t - eta)
+    )
+    out <- rep(-Inf, n)
+    keep <- is.finite(log_ch) & log_ch <= 700
+    if (any(keep)) {
+      out[keep] <- .r_log_haz(
+        dist, t, eta[keep], a[keep], a2[keep]
+      ) - exp(log_ch[keep])
+    }
+    return(out)
+  }
+  if (dist == 6L) {
+    z <- (log_t - eta) / a
+    return(-0.5 * z^2 - log(a) - log_t - 0.5 * log(2 * pi))
+  }
+  if (dist == 7L) {
+    z <- a * (log_t - eta)
+    out <- log(a) - log_t
+    upper <- z >= 0
+    out[upper] <- out[upper] - z[upper] -
+      2 * log1p(exp(-z[upper]))
+    out[!upper] <- out[!upper] + z[!upper] -
+      2 * log1p(exp(z[!upper]))
+    return(out)
+  }
+  if (dist == 8L) {
+    log_z <- log_t - eta
+    out <- rep(-Inf, n)
+    keep <- is.finite(log_z) & log_z <= 700
+    out[keep] <- (a[keep] - 1) * log_z[keep] - eta[keep] -
+      exp(log_z[keep]) - lgamma(a[keep])
+    return(out)
+  }
+
+  z <- (log_t - eta) / (a * sqrt(a2))
+  log_w <- log(a2) + z
+  out <- rep(-Inf, n)
+  keep <- is.finite(log_w) & log_w <= 700
+  out[keep] <- -log(a[keep]) - log_t -
+    0.5 * log(a2[keep]) * (1 - 2 * a2[keep]) +
+    a2[keep] * z[keep] - exp(log_w[keep]) - lgamma(a2[keep])
   out
 }

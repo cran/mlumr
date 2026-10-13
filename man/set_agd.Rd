@@ -24,10 +24,15 @@ set_agd(
 
 \item{treatment}{Column name for treatment variable}
 
-\item{family}{Outcome family: \code{"binomial"}, \code{"normal"}, or \code{"poisson"}}
+\item{family}{Outcome family: \code{"binomial"}, \code{"normal"}, or \code{"poisson"}.
+Time-to-event comparator data go to \code{\link[=set_agd_surv]{set_agd_surv()}} instead, which takes
+reconstructed pseudo-IPD rather than a scalar outcome summary.}
 
-\item{outcome_n}{Column name for sample size (required for binomial,
-optional for normal)}
+\item{outcome_n}{Column name for sample size. Required for binomial. For
+normal, required when there is more than one aggregate row, because the
+comparator-population estimand is the size-weighted mixture of those rows
+and they cannot be combined without knowing how large each is; optional for
+a single row, where the weighting is irrelevant.}
 
 \item{outcome_r}{Column name for number of events (required for binomial
 and poisson)}
@@ -50,33 +55,32 @@ each covariate. If \code{NULL}, inferred from presence of SD.}
 \item{study}{Column name for study identifier (optional)}
 }
 \value{
-An object of class \code{mlumr_agd}
+An object of class \code{mlumr_agd}. As for \code{\link[=set_ipd]{set_ipd()}}, the internal
+column names cannot be used as column names in \code{data}.
 }
 \description{
 Prepare AgD from the comparator treatment for an unanchored indirect
 comparison.
 }
 \details{
-\strong{Scale assumptions for \code{family = "normal"}.} The AgD likelihood is
-\code{y_agd ~ normal(E[exp(eta)], se_agd)} under \code{link = "log"} and
-\code{y_agd ~ normal(E[eta], se_agd)} under \code{link = "identity"}. In both
-cases \code{outcome_mean} and \code{outcome_se} must be on the \strong{arithmetic
-(original, untransformed) scale}. If a publication reports only a
-log-scale mean / SD or a geometric mean, back-transform before
-calling \code{set_agd()} and propagate uncertainty via the delta method;
-passing log-scale or geometric summaries silently misspecifies the
-likelihood and biases the posterior.
+\strong{Rows must partition the aggregate sample.} Each row contributes its own
+likelihood factor, as if the rows were disjoint sets of patients. One arm,
+or one set of mutually exclusive subgroup cells, is right; several
+overlapping subgroup tables of the same participants count every patient
+once per table and overstate the precision. Nothing in the data reveals
+the overlap, so it is not checked. See
+\code{vignette("subgroup-identification", "mlumr")} for how many rows the
+relaxed model needs.
 
-\strong{Scale assumptions for \code{family = "poisson"}.} \code{outcome_r} is the
-total count in each AgD row and \code{outcome_E} is the total
-person-time (or other exposure). The Stan likelihood uses
-\code{log(E_agd)} as an offset, so rates are modeled on the log scale
-regardless of how \code{outcome_r} is tabulated.
-
-\strong{Scale assumptions for \code{family = "binomial"}.} \code{outcome_r} /
-\code{outcome_n} are counts of events and trials. The log-odds (or
-probit / cloglog under alternative links) are formed from
-\code{outcome_r / outcome_n}, so no scale conversion is required.
+\strong{Scales.} For \code{family = "normal"}, \code{outcome_mean} and \code{outcome_se} are on
+the arithmetic scale under both links; a geometric mean or a log-scale
+summary is a different quantity and cannot be converted by the delta
+method. For \code{family = "poisson"}, \code{outcome_r} is the total count and
+\code{outcome_E} the total person-time, and the covariate distribution the rate
+is averaged over has to describe the covariates weighted by exposure;
+person-level moments stand in for that only when exposure carries no
+information about the rate within the row. For \code{family = "binomial"},
+\code{outcome_r} and \code{outcome_n} are counts of events and trials.
 }
 \examples{
 \dontrun{

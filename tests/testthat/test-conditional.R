@@ -82,7 +82,8 @@ test_that("conditional link effects use eta differences directly", {
     effect = "rr",
     summary = FALSE
   )
-  expect_true(all(is.finite(rr$rr)))
+  expect_identical(rr$rr[1], Inf)
+  expect_equal(rr$rr[2], plogis(1) / plogis(0))
 
   link_pred <- conditional_predict(
     fit,
@@ -97,9 +98,8 @@ test_that("conditional link effects use eta differences directly", {
 
 test_that("conditional_effects works with default and custom newdata", {
   skip_on_cran()
-  skip_if_not_installed("rstan")
 
-  set.seed(42)
+  set.seed(2026)
   n <- 80
   x1 <- rbinom(n, 1, 0.5)
   outcome <- rbinom(n, 1, plogis(-0.3 + 0.8 * x1))
@@ -115,7 +115,7 @@ test_that("conditional_effects works with default and custom newdata", {
                          x1 = distr(qbern, prob = x1_mean))
 
   fit <- mlumr(dat, model = "spfa", chains = 2, iter = 500,
-               warmup = 250, refresh = 0, seed = 123)
+               warmup = 250, refresh = 0, seed = 2026)
 
   # Default newdata (IPD means)
   ce <- conditional_effects(fit)
@@ -139,9 +139,8 @@ test_that("conditional_effects works with default and custom newdata", {
 
 test_that("conditional_predict works with response and link types", {
   skip_on_cran()
-  skip_if_not_installed("rstan")
 
-  set.seed(42)
+  set.seed(2026)
   n <- 80
   x1 <- rbinom(n, 1, 0.5)
   outcome <- rbinom(n, 1, plogis(-0.3 + 0.8 * x1))
@@ -157,7 +156,7 @@ test_that("conditional_predict works with response and link types", {
                          x1 = distr(qbern, prob = x1_mean))
 
   fit <- mlumr(dat, model = "spfa", chains = 2, iter = 500,
-               warmup = 250, refresh = 0, seed = 123)
+               warmup = 250, refresh = 0, seed = 2026)
 
   # Response type (default)
   cp <- conditional_predict(fit, type = "response")
@@ -179,4 +178,27 @@ test_that("conditional_predict works with response and link types", {
   cp_draws <- conditional_predict(fit, summary = FALSE)
   expect_s3_class(cp_draws, "data.frame")
   expect_true(nrow(cp_draws) > nrow(cp))
+})
+
+# R names a quantile with `format()`, which prints to the display precision,
+# while every lookup in the package builds the name from the probability
+# itself. The two agree for a round probability and not otherwise, so a
+# caller asking for a third got a column of NA out of finite draws. The
+# summary now carries the package's own names, so no lookup can disagree
+# with them.
+
+test_that("a quantile whose name R would round is still reported", {
+  s <- mlumr:::.summarize_draw_vector(c(0, 1, 2), probs = c(1 / 3, 0.5))
+  qname <- mlumr:::.quantile_names(1 / 3)
+  # The two spellings, which is the whole of the bug.
+  expect_false(identical(qname, paste0("q", names(stats::quantile(0, 1 / 3)))))
+  expect_true(qname %in% names(s))
+  expect_equal(unname(s[[qname]]), 2 / 3)
+  expect_false(is.na(s[[qname]]))
+
+  # And the matrix summary agrees with the vector one it is built from.
+  m <- mlumr:::.summarize_draw_matrix(matrix(c(0, 1, 2, 3, 4, 5), ncol = 2),
+                                      probs = c(1 / 3, 0.5))
+  expect_true(qname %in% names(m))
+  expect_false(anyNA(m[[qname]]))
 })

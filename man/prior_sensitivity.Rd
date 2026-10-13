@@ -7,6 +7,7 @@
 prior_sensitivity(
   fit,
   prior_beta_scales = c(0.5, 1, 2.5, 5, 10),
+  prior_beta_comparator_scales = NULL,
   probs = c(0.025, 0.5, 0.975),
   verbose = TRUE,
   ...
@@ -16,7 +17,17 @@ prior_sensitivity(
 \item{fit}{A fitted \code{mlumr_fit} object to re-fit under alternative priors.}
 
 \item{prior_beta_scales}{Numeric vector of scales for \code{prior_beta}.
-Default \code{c(0.5, 1, 2.5, 5, 10)}.}
+Default \code{c(0.5, 1, 2.5, 5, 10)}. For a normal identity-link fit whose
+\code{prior_beta} is the package default or autoscaled, each scale is in
+units of the IPD outcome SD, as the fit's own prior is (see
+\code{\link[=prior_normal]{prior_normal()}}). The intercept and \code{sigma} priors are held at the
+fit's own.}
+
+\item{prior_beta_comparator_scales}{(Relaxed fits only.) Numeric vector of
+scales for \code{prior_beta_comparator}, paired elementwise with
+\code{prior_beta_scales}. \code{NULL} (default) sweeps the comparator prior in
+parallel with \code{prior_beta_scales}; the scale used is reported in the
+\code{scale_comparator} column. Ignored, with a warning, for SPFA fits.}
 
 \item{probs}{Quantiles for summarizing each posterior
 (default \code{c(0.025, 0.5, 0.975)}).}
@@ -29,10 +40,17 @@ printed summary table.}
 from the original fit.}
 }
 \value{
-A data frame (tibble-style) with one row per
-(scale, population, quantile) combination and columns \code{scale},
-\code{parameter}, \code{mean}, \code{sd}, and the requested quantiles. Side effect:
-prints a summary table at the end.
+A data frame with one row per (prior scale, summarized parameter)
+pair, and columns \code{scale}, \code{scale_comparator} (dropped when the model has
+no comparator coefficient prior), \code{parameter}, \code{effect}, \code{at_time} (present
+only when the summarized effect has an evaluation time, so absent for every
+non-survival family and for survival scalars that carry none),
+\code{mean}, \code{sd}, and one column per requested quantile, named \code{q} followed by
+the percentage (the default \code{probs} give \code{q2.5}, \code{q50}, \code{q97.5}), matching
+\code{\link[=marginal_effects]{marginal_effects()}}. Quantiles are columns, not a row dimension.
+Side effect: prints a summary table at the end when \code{verbose = TRUE},
+which is the default; \code{verbose = FALSE} returns the same data frame and
+prints nothing.
 }
 \description{
 Refit an \code{\link[=mlumr]{mlumr()}} model across a grid of \code{prior_beta} scales (keeping the
@@ -42,18 +60,20 @@ is the workflow recommended by Vehtari et al.'s prior-choice wiki for
 judging how much of the posterior is driven by the data versus the prior.
 }
 \details{
-Only the scale of the \code{prior_beta} family is varied; its distribution
-(normal / student_t) and mean are preserved so comparisons are apples to
-apples. \code{prior_intercept} and \code{prior_sigma} are carried through
-unchanged from the original fit. Each value in \code{prior_beta_scales} is
-used as the \strong{absolute} scale for every coefficient at that refit --- if
-the original fit used per-coefficient priors, all coefficients are set
-to the same scale (the sweep is deliberately homogeneous so the grid
-reflects a single level of prior informativeness per refit, not a
-rescaling of existing relative differences). If the original
-\code{prior_beta} used an exponential family, it is swapped for a
-\code{prior_normal(0, scale)} at each grid point since exponential has no
-scale parameter to vary.
+The design-matrix controls (\code{center}, \code{qr}) are taken from the original fit
+and replayed, so a refit reproduces the original parameterization instead of
+reverting to the defaults. A fit made with \code{center = FALSE} or \code{qr = TRUE} is
+a different parameterization, and replaying the defaults would vary the model
+as well as the prior.
+
+Only the scale of \code{prior_beta} is varied; its family and mean, and every
+other prior and setting, come from the original fit. Each scale is applied
+to every coefficient, so the sweep reflects one level of prior
+informativeness per refit; an exponential \code{prior_beta} is swapped for
+\code{prior_normal(0, scale)}. For a relaxed fit the comparator prior is swept
+alongside, because the index-population estimand is driven by the
+comparator coefficients; holding their prior fixed would report a flat curve
+for exactly the quantity most exposed to the prior.
 }
 \examples{
 \dontrun{

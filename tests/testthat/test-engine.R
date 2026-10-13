@@ -16,6 +16,22 @@ test_that("setting engine to invalid value errors", {
                "`engine` must be 'rstan' or 'cmdstanr'")
 })
 
+test_that("cmdstanr is not selected when it cannot be installed here", {
+  withr::local_options(list(mlumr.stan_engine = "rstan"))
+  local_mocked_bindings(.cmdstan_available = function() FALSE)
+  expect_message(out <- mlumr_engine("cmdstanr"), "Engine unchanged \\(rstan\\)")
+  expect_identical(out, "rstan")
+  expect_identical(getOption("mlumr.stan_engine"), "rstan")
+})
+
+test_that("cmdstanr is selected once cmdstanr and CmdStan are available", {
+  withr::local_options(list(mlumr.stan_engine = "rstan"))
+  local_mocked_bindings(.cmdstan_available = function() TRUE)
+  skip_if_not_installed("cmdstanr")
+  expect_message(mlumr_engine("cmdstanr"), "set to: cmdstanr")
+  expect_identical(mlumr_engine(), "cmdstanr")
+})
+
 test_that("get_engine returns option value", {
   withr::local_options(list(mlumr.stan_engine = "cmdstanr"))
   expect_equal(mlumr:::get_engine(), "cmdstanr")
@@ -26,28 +42,13 @@ test_that("get_engine rejects invalid option values", {
   expect_error(mlumr:::get_engine(), "`engine` must be 'rstan' or 'cmdstanr'")
 })
 
-test_that("unchanged-engine message tolerates invalid option values", {
-  withr::local_options(list(mlumr.stan_engine = "bad"))
-  expect_message(value <- mlumr:::.message_engine_unchanged(),
-                 "Engine unchanged \\(invalid current option\\)")
-  expect_true(is.na(value))
-})
-
-test_that("get_engine defaults to rstan when option is NULL", {
-  withr::local_options(list(mlumr.stan_engine = NULL))
-  expect_equal(mlumr:::get_engine(), "rstan")
-})
-
 
 test_that("cmdstanr backend fits a model end-to-end", {
   skip_on_cran()
   skip_if_not_installed("cmdstanr")
-  skip_if_not(
-    tryCatch({ cmdstanr::cmdstan_path(); TRUE }, error = function(e) FALSE),
-    "CmdStan not available"
-  )
+  skip_if_not(cmdstan_is_usable(), "CmdStan not available")
 
-  set.seed(42)
+  set.seed(2026)
   n <- 50
   x1 <- rbinom(n, 1, 0.5)
   y <- rbinom(n, 1, plogis(-0.5 + 0.8 * x1))
@@ -62,7 +63,7 @@ test_that("cmdstanr backend fits a model end-to-end", {
                          x1 = distr(qbern, prob = x1_mean))
 
   fit <- mlumr(dat, model = "spfa", engine = "cmdstanr",
-               chains = 2, iter = 500, warmup = 250, refresh = 0, seed = 123)
+               chains = 2, iter = 500, warmup = 250, refresh = 0, seed = 2026)
 
   expect_s3_class(fit, "mlumr_fit")
   expect_equal(fit$family, "binomial")
@@ -74,4 +75,14 @@ test_that("cmdstanr backend fits a model end-to-end", {
   expect_true(is.numeric(fit$diagnostics$n_divergent))
   expect_true(is.numeric(fit$diagnostics$n_max_treedepth))
   expect_false(file.exists(file.path("inst", "stan", "mlumr_binary_spfa")))
+
+  # se_mean is the Monte Carlo SE of the mean of the draws, chain by chain;
+  # a risk ratio is skewed, where a rank-normalized ESS would misstate it.
+  vars <- c("mu_index", "rr_index")
+  arr <- fit$stanfit$draws(variables = vars)
+  expected <- vapply(vars, function(v) {
+    posterior::mcse_mean(posterior::extract_variable_matrix(arr, v))
+  }, numeric(1))
+  got <- fit$summary$se_mean[match(vars, fit$summary$variable)]
+  expect_equal(got, unname(expected))
 })

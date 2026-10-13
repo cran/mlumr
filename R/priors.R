@@ -5,50 +5,26 @@
 #' Stan models.
 #'
 #' @section Choosing a scale:
+#' The default intercept prior `normal(0, 10)` is very weak on the link scale,
+#' and the data usually constrain the intercept strongly. The coefficient
+#' default `normal(0, 2.5)` is a generic starting value on the link scale per
+#' unit of covariate, not a calibrated choice; use `autoscale = TRUE` for
+#' predictors on different scales and calibrate with prior predictive checks
+#' (Gelman et al., 2008; the Stan prior-choice wiki). `prior_sigma` is a
+#' normal truncated at zero through the Stan `<lower=0>` constraint, a
+#' half-normal at the default mean of 0.
 #'
-#' The Stan community's prior-choice wiki (Vehtari et al., 2025) describes
-#' five broad categories, from least to most informative:
-#'
-#' \enumerate{
-#'   \item Flat prior — not recommended.
-#'   \item Super-vague proper prior, e.g., `normal(0, 1e6)` — not
-#'     recommended.
-#'   \item Weakly informative, **very weak**, e.g., `normal(0, 10)`.
-#'   \item Generic weakly informative, e.g., `normal(0, 1)`.
-#'   \item Specific informative, e.g., `normal(0.4, 0.2)`.
-#' }
-#'
-#' Those scales assume parameters are on roughly unit scale. In ML-UMR
-#' models the natural scales are:
-#'
-#' \describe{
-#'   \item{Treatment intercepts}{On the linear-predictor (link) scale. For
-#'     a binary outcome with logit link, the intercept is a baseline log
-#'     odds; `normal(0, 10)` spans ±20 log-odds at 95 percent and is
-#'     "very weak". It is the default because the data usually constrain
-#'     the intercept strongly. Tightening to `normal(0, 5)` is reasonable
-#'     when the expected event rate is far from the extremes.}
-#'   \item{Regression coefficients (`beta`)}{On the link scale, per unit
-#'     of covariate. For logistic regression with predictors on unit
-#'     scale, Gelman et al. (2008) and the Stan wiki recommend
-#'     `student_t(df, 0, 2.5)` with `df` in `3:7`, or — as a practical
-#'     approximation — `normal(0, 2.5)`. That is the default used by
-#'     [mlumr()]. Use `normal(0, 1)` if you expect small effects (e.g.,
-#'     standardized predictors in a normal-outcome model). If predictors
-#'     are on very different scales, set `autoscale = TRUE` so the scale
-#'     is divided by each covariate's SD.}
-#'   \item{Residual SD (`sigma`, normal family only)}{`prior_sigma` is
-#'     interpreted as a half-normal via the Stan `<lower=0>` constraint.
-#'     The default `normal(0, 2.5)` (i.e., `half-normal(0, 2.5)`) is
-#'     weakly informative for residual SDs on the scale of the outcome.
-#'     Scale to the outcome if it is far from unit scale, or use
-#'     [prior_exponential()].}
-#' }
-#'
-#' Prior sensitivity is especially important for the relaxed model,
-#' where `beta_comparator` is identified only by the AgD likelihood.
-#' Run [prior_sensitivity()] to quantify how much conclusions move under
-#' alternative scales; see `vignette("mlumr-models")`.
+#' For `family = "normal"` the identity link is not unit-free: the intercepts
+#' and coefficients are in the outcome's units, and so is the residual SD
+#' under either link. There the package defaults are read in units of the IPD
+#' outcome SD, `sd(y)`: `normal(0, 10 * sd(y))` for the intercepts,
+#' `normal(0, 2.5 * sd(y))` for the coefficients (identity link) and a
+#' half-normal with scale `2.5 * sd(y)` for the residual SD (either link), and
+#' `autoscale = TRUE` gives a coefficient scale of `sd * sd(y) / sd(x)`. A
+#' prior written out by the user is used as given. [prior_summary()] prints
+#' the scales the model used. Run
+#' [prior_sensitivity()] for the relaxed model, whose `beta_comparator` is
+#' identified only by the aggregate likelihood.
 #'
 #' @param mean Prior mean (default 0).
 #' @param sd Prior standard deviation (default 10). The default matches
@@ -56,7 +32,9 @@
 #'   recommended for regression coefficients (see Details).
 #' @param autoscale If `TRUE` and this prior is passed as `prior_beta`,
 #'   the scale is divided by each covariate's empirical SD so the prior
-#'   is weakly-informative regardless of predictor scaling. Default
+#'   is weakly-informative regardless of predictor scaling, and for
+#'   `family = "normal"` with the identity link also multiplied by the IPD
+#'   outcome SD, since the coefficients are then in outcome units. Default
 #'   `FALSE` to preserve backward-compatible behavior; set to `TRUE`
 #'   explicitly when passing unstandardized predictors. Ignored for
 #'   `prior_intercept` and `prior_sigma`.
@@ -68,7 +46,7 @@
 #' @references
 #' Gelman, A., Jakulin, A., Pittau, M. G., & Su, Y.-S. (2008). A weakly
 #' informative default prior distribution for logistic and other
-#' regression models. *Annals of Applied Statistics*, 2(4), 1360–1383.
+#' regression models. *Annals of Applied Statistics*, 2(4), 1360-1383.
 #'
 #' Vehtari, A. et al. Prior Choice Recommendations (Stan wiki):
 #' <https://github.com/stan-dev/stan/wiki/Prior-Choice-Recommendations>.
@@ -77,7 +55,7 @@
 #' # Default weakly-very-weak intercept prior
 #' prior_normal(mean = 0, sd = 10)
 #'
-#' # Gelman 2008 default for logistic-regression coefficients
+#' # Package starting value for regression coefficients
 #' prior_normal(mean = 0, sd = 2.5)
 #'
 #' # Autoscaled coefficient prior (dividing 2.5 by each covariate's SD)
@@ -97,13 +75,12 @@ prior_normal <- function(mean = 0, sd = 10, autoscale = FALSE) {
 
 #' Specify a Student-t prior
 #'
-#' Heavier-tailed alternative to [prior_normal()]. For logistic-regression
-#' coefficients with unit-scale predictors, the Stan community prior-choice
-#' recommendations suggest Student-t with `df` between 3 and 7 as a robust
-#' weakly informative prior (Gelman et al., 2008).
+#' Heavier-tailed alternative to [prior_normal()]. A Student-t with moderate
+#' degrees of freedom can be a robust weakly informative starting family, but
+#' its scale still requires calibration to the link, outcome, and predictor
+#' scaling.
 #'
-#' @param df Degrees of freedom (must be positive). Values in `3:7` are
-#'   recommended for logistic-regression coefficients.
+#' @param df Degrees of freedom (must be positive).
 #' @param mean Prior location (default 0).
 #' @param sd Prior scale (default 2.5).
 #' @param autoscale See [prior_normal()]. Default `FALSE`.
@@ -113,7 +90,7 @@ prior_normal <- function(mean = 0, sd = 10, autoscale = FALSE) {
 #' @export
 #'
 #' @examples
-#' # Gelman et al. 2008 recommendation for logistic-regression coefficients
+#' # A moderately heavy-tailed coefficient prior
 #' prior_student_t(df = 5, mean = 0, sd = 2.5)
 prior_student_t <- function(df = 5, mean = 0, sd = 2.5, autoscale = FALSE) {
   .validate_prior_number(df, "df", positive = TRUE)
@@ -131,12 +108,9 @@ prior_student_t <- function(df = 5, mean = 0, sd = 2.5, autoscale = FALSE) {
 
 #' Specify a Cauchy prior
 #'
-#' Cauchy is Student-t with `df = 1`; this constructor is a convenience
-#' wrapper around [prior_student_t()]. It has very heavy tails and should
-#' be used with care — modern recommendations generally prefer
-#' `prior_student_t(df in 3:7, ...)` over Cauchy for regression
-#' coefficients to keep sampling well-behaved (see Piironen & Vehtari on
-#' the horseshoe; Ghosh et al. 2015).
+#' Cauchy is Student-t with `df = 1`, a wrapper around [prior_student_t()].
+#' Its very heavy tails can slow sampling; a Student-t with 3 to 7 degrees of
+#' freedom is usually preferred for regression coefficients.
 #'
 #' @param mean Prior location (default 0).
 #' @param sd Prior scale (default 2.5).
@@ -186,7 +160,9 @@ prior_exponential <- function(rate = 1) {
 #' Default priors used by [mlumr()]
 #'
 #' These accessors return the current default priors used by [mlumr()],
-#' tagged with `$default = TRUE` and the package version. [prior_summary()]
+#' tagged with `$default = TRUE` and the package version. For
+#' `family = "normal"` their scales are multiples of the IPD outcome SD
+#' wherever the parameter is in outcome units; see [prior_normal()]. [prior_summary()]
 #' prints the version so cross-release reproducibility is diagnosable: if a
 #' later release changes a default, fits produced with an older version
 #' will still carry the correct `$version` tag.
@@ -217,7 +193,26 @@ default_prior_sigma <- function() {
   .tag_default(prior_normal(mean = 0, sd = 2.5))
 }
 
-#' @keywords internal
+#' @rdname default_priors
+#' @export
+#' @details
+#' `default_prior_aux()` and `default_prior_smooth()` apply to the survival
+#' family only. `prior_aux` is a half-normal(0, 2) on the shape/scale
+#' parameter(s) of parametric survival distributions (Weibull/Gompertz/gamma
+#' shape, log-normal sdlog, generalized-gamma shapes). `prior_smooth` is a
+#' half-normal(0, 1) on the random-walk smoothing SD of the M-spline /
+#' piecewise-exponential baseline hazard.
+default_prior_aux <- function() {
+  .tag_default(prior_normal(mean = 0, sd = 2))
+}
+
+#' @rdname default_priors
+#' @export
+default_prior_smooth <- function() {
+  .tag_default(prior_normal(mean = 0, sd = 1))
+}
+
+#' @noRd
 .tag_default <- function(prior) {
   prior$default <- TRUE
   prior$version <- as.character(utils::packageVersion("mlumr"))
@@ -230,7 +225,7 @@ default_prior_sigma <- function() {
 #' Validate prior specification
 #' @param prior Prior specification list
 #' @param param_name Parameter name for error messages
-#' @keywords internal
+#' @noRd
 validate_prior <- function(prior, param_name = "parameter") {
   if (!is.list(prior)) {
     stop(sprintf("Prior for %s must be a list", param_name), call. = FALSE)
@@ -299,13 +294,55 @@ validate_prior <- function(prior, param_name = "parameter") {
 }
 
 #' Is this object a single prior (vs a list of priors)?
-#' @keywords internal
+#' @noRd
 is_single_prior <- function(x) {
   is.list(x) && !is.null(x$distribution)
 }
 
 
 # ---- Stan-data translation -------------------------------------------------
+
+#' IPD outcome SD, the unit of the normal family's default priors
+#'
+#' Falls back to 1, no rescaling, when the IPD outcome has no SD, as with a
+#' single row or a constant outcome; `mlumr()` warns about the first and
+#' refuses the second.
+#' @param y The IPD outcome.
+#' @return A positive finite number.
+#' @noRd
+.outcome_sd <- function(y) {
+  s <- stats::sd(as.numeric(y))
+  if (is.finite(s) && s > 0) s else 1
+}
+
+#' Is this prior's scale a multiple of the outcome SD?
+#'
+#' A package default is, and so is a prior derived from one by
+#' [prior_sensitivity()], which marks it `outcome_scale`.
+#' @noRd
+.on_outcome_scale <- function(prior) {
+  isTRUE(prior$default) || isTRUE(prior$outcome_scale)
+}
+
+#' Put a default prior in units of the outcome SD
+#'
+#' The normal family's intercepts and coefficients (identity link) and its
+#' residual SD (either link) are in the outcome's units, so a default there
+#' is `sd_y` times its nominal scale. A prior the user wrote is returned
+#' unchanged, and so is every prior when `sd_y` is 1.
+#' @param prior A single prior list.
+#' @param sd_y The outcome SD, or 1 where the parameter is unit-free.
+#' @return The prior as the model uses it.
+#' @noRd
+.outcome_scaled_prior <- function(prior, sd_y = 1) {
+  if (sd_y == 1 || !.on_outcome_scale(prior)) return(prior)
+  prior$mean <- prior$mean * sd_y
+  prior$sd <- prior$sd * sd_y
+  if (identical(prior$distribution, "exponential")) {
+    prior$rate <- prior$rate / sd_y
+  }
+  prior
+}
 
 #' Translate a scalar prior spec to the Stan data fields
 #'
@@ -316,7 +353,7 @@ is_single_prior <- function(x) {
 #'
 #' @param prior A prior list.
 #' @return A list with `mean`, `sd`, `dist`, `df`.
-#' @keywords internal
+#' @noRd
 stan_prior_fields <- function(prior) {
   validate_prior(prior)
   dist_code <- switch(prior$distribution,
@@ -356,12 +393,16 @@ stan_prior_fields <- function(prior) {
 #' @param covariate_names Optional character vector of covariate names
 #'   (length `n_cov`). Used only to produce informative warnings when
 #'   `autoscale = TRUE` meets a zero-SD covariate.
+#' @param sd_y The IPD outcome SD for a normal identity-link fit, whose
+#'   coefficients are in outcome units, else 1. Multiplies the scale of each
+#'   default or autoscaled element.
 #' @return A list with numeric vectors `mean` and `sd` (length `n_cov`)
-#'   and scalars `dist`, `df`, and a logical vector `autoscale` recording
-#'   which elements were autoscaled (for `prior_summary()`).
-#' @keywords internal
+#'   and scalars `dist`, `df`, a logical vector `autoscale` recording
+#'   which elements were autoscaled, and `sd_y`, the outcome-SD factor each
+#'   element carries (for `prior_summary()`).
+#' @noRd
 stan_prior_fields_beta <- function(prior, n_cov, sd_x = NULL,
-                                   covariate_names = NULL) {
+                                   covariate_names = NULL, sd_y = 1) {
 
   # Expand to a list of n_cov single-priors
   if (is_single_prior(prior)) {
@@ -405,6 +446,13 @@ stan_prior_fields_beta <- function(prior, n_cov, sd_x = NULL,
   sds   <- vapply(prior_list, function(p) as.numeric(p$sd)[[1L]],   numeric(1))
   autos <- vapply(prior_list, function(p) isTRUE(p$autoscale),      logical(1))
 
+  # Under the normal identity link a coefficient is in outcome units per
+  # covariate unit, so a default or autoscaled prior carries the outcome SD.
+  on_y <- vapply(prior_list, .on_outcome_scale, logical(1)) | autos
+  y_scale <- ifelse(on_y, sd_y, 1)
+  means <- means * y_scale
+  sds <- sds * y_scale
+
   if (any(autos)) {
     if (is.null(sd_x)) {
       stop("`autoscale = TRUE` requires covariate SDs; did you call ",
@@ -413,11 +461,9 @@ stan_prior_fields_beta <- function(prior, n_cov, sd_x = NULL,
     if (length(sd_x) != n_cov) {
       stop("`sd_x` must have length n_cov", call. = FALSE)
     }
-    # Protect against sd_x == 0 (constant covariate): fall back to unscaled
-    # and warn, so the user knows the autoscale contract has been broken
-    # for those columns. Naming the offending covariates makes the warning
-    # actionable.
-    zero_var <- autos & sd_x <= 0
+    # A covariate with no usable SD keeps the unscaled prior, with a warning.
+    no_scale <- !is.finite(sd_x) | sd_x <= 0
+    zero_var <- autos & no_scale
     if (any(zero_var)) {
       if (is.null(covariate_names) || length(covariate_names) != n_cov) {
         bad <- sprintf("column %d", which(zero_var))
@@ -425,15 +471,14 @@ stan_prior_fields_beta <- function(prior, n_cov, sd_x = NULL,
         bad <- covariate_names[zero_var]
       }
       warning(sprintf(
-        paste0("`autoscale = TRUE` is requested for covariate(s) with zero ",
-               "empirical SD in the IPD: %s. The prior on these coefficients ",
-               "falls back to the un-autoscaled scale (sd as supplied). ",
-               "Consider removing the constant covariate or turning ",
-               "autoscale off for it."),
+        paste0("`autoscale = TRUE` is requested for covariate(s) with no ",
+               "usable empirical SD in the IPD (zero or undefined): %s. ",
+               "Their prior scale is used as supplied."),
         paste(bad, collapse = ", ")
       ), call. = FALSE)
     }
-    sd_x_safe <- ifelse(sd_x > 0, sd_x, 1)
+    sd_x_safe <- ifelse(no_scale, 1, sd_x)
+    means <- ifelse(autos, means / sd_x_safe, means)
     sds <- ifelse(autos, sds / sd_x_safe, sds)
   }
 
@@ -445,6 +490,7 @@ stan_prior_fields_beta <- function(prior, n_cov, sd_x = NULL,
     sd = sds,
     dist = dist_code,
     df = df_value,
-    autoscale = autos
+    autoscale = autos,
+    sd_y = y_scale
   )
 }

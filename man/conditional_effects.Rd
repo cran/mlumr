@@ -23,7 +23,21 @@ from the IPD as a single reference profile.}
 \item{effect}{Which effect measure. For binomial: \code{"all"}, \code{"link_effect"},
 \code{"rd"}, or \code{"rr"}. For normal: \code{"all"} or \code{"md"}. For Poisson: \code{"all"}
 or \code{"rr"}. The legacy value \code{"lor"} is accepted as an alias for
-\code{"link_effect"} when the fitted link is logit.}
+\code{"link_effect"} when the fitted link is logit.
+
+For \strong{survival}, \code{exp(eta_index - eta_comparator)} is a conditional
+hazard ratio (\code{"hr"}, proportional-hazards distributions) or time ratio
+(\code{"tr"}, accelerated failure time distributions) only when the two
+studies share a baseline shape (\code{aux_by = "none"}, or any exponential
+fit). The two are different measures: \code{"tr"} on a proportional-hazards
+fit and \code{"hr"} on an AFT fit are errors, whose message gives the
+conversion where one exists (\code{TR = HR^(-1/shape)} for a Weibull, applied
+draw by draw; \code{TR = 1/HR} for an exponential). Under the default
+study-specific shapes an explicit \code{"hr"} or \code{"tr"} is an error, since
+the baseline ratio does not cancel; \code{"all"} returns the contrast under
+the label \code{"EXP_ETA_CONTRAST"} with a warning. The RMST effects from
+\code{\link[=marginal_effects]{marginal_effects()}} are the recommended alternative, and
+\code{predict(type = "loghr")} gives the population-standardized curve.}
 
 \item{summary}{Return summary statistics (\code{TRUE}) or full posterior draws
 (\code{FALSE})}
@@ -32,7 +46,7 @@ or \code{"rr"}. The legacy value \code{"lor"} is accepted as an alias for
 }
 \value{
 A data frame. If \code{summary = TRUE}, contains columns \code{profile},
-\code{effect}, \code{mean}, \code{sd}, and quantile columns. If \code{summary = FALSE},
+\code{effect}, \code{mean}, \code{sd} and quantile columns. If \code{summary = FALSE},
 returns a single combined data frame of full posterior draws with a
 \code{profile} column indicating which covariate profile each draw belongs
 to.
@@ -52,18 +66,12 @@ probability levels. For relaxed models, all conditional effects vary with
 covariate values because the index and comparator treatments have different
 regression coefficients.
 
-The conditional link-scale effect is computed directly as
-\code{eta_index - eta_comparator}. This avoids numerical distortion from
-transforming extreme response-scale probabilities back through the link
-function.
-
-\strong{Conditional vs marginal on non-identity links.} Conditional effects are
-evaluated at a single covariate profile, so there is no averaging over a
-population and no Jensen's-inequality gap between the conditional and
-marginal response. Compare with \code{\link[=marginal_effects]{marginal_effects()}} and
-\code{\link[=predict.mlumr_fit]{predict.mlumr_fit()}}, which average over either the IPD individuals
-(index population) or the AgD integration points (comparator population)
-and therefore return \code{E[g^{-1}(eta)]}, not \code{g^{-1}(E[eta])}.
+For binomial, normal and Poisson the conditional link-scale effect is
+\code{eta_index - eta_comparator}; for survival the contrast is exponentiated
+(null 1) and labeled \code{"EXP_ETA_CONTRAST"} when the baseline shapes
+differ. A conditional effect is evaluated at one profile, so unlike
+\code{\link[=marginal_effects]{marginal_effects()}} and \code{\link[=predict.mlumr_fit]{predict.mlumr_fit()}} there is no averaging over
+a population and no gap between \code{E[g^{-1}(eta)]} and \code{g^{-1}(E[eta])}.
 }
 \examples{
 \dontrun{

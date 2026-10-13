@@ -48,6 +48,10 @@ prior_summary.mlumr_fit <- function(object, digits = 3, ...) {
   if (!is.null(priors$beta_resolved)) {
     priors$beta_resolved <- .validate_resolved_beta_prior(priors$beta_resolved)
   }
+  if (!is.null(priors$beta_comparator_resolved)) {
+    priors$beta_comparator_resolved <-
+      .validate_resolved_beta_prior(priors$beta_comparator_resolved)
+  }
 
   cat("Priors for ML-UMR Fit\n")
   cat("=====================\n\n")
@@ -56,55 +60,64 @@ prior_summary.mlumr_fit <- function(object, digits = 3, ...) {
   cat("Intercepts (mu_index, mu_comparator):\n")
   cat("  ", .format_prior(priors$intercept, digits = digits), "\n", sep = "")
   .print_default_tag(priors$intercept)
+  .print_outcome_scaled(priors$intercept, priors$intercept_resolved,
+                        priors$outcome_sd, digits)
   cat("\n")
 
   # Beta (regression coefficients)
-  cat("Regression coefficients (beta):\n")
-  br <- priors$beta_resolved
-  if (is.null(br)) {
-    # Fallback for older fits: just print the user-specified prior.
-    cat(paste0("  ", .format_prior_collection(priors$beta, digits = digits)),
-        sep = "\n")
-    cat("\n")
-  } else {
-    # Detect whether the resolved per-coefficient priors are homogeneous.
-    means_eq <- length(unique(round(br$mean, 12))) == 1L
-    sds_eq   <- length(unique(round(br$sd,   12))) == 1L
-    autos_any <- any(br$autoscale)
+  .print_beta_prior_block("Regression coefficients (beta):",
+                          priors$beta_resolved, priors$beta, digits)
 
-    family_label <- .resolved_prior_family_label(br$dist)
-    broadcast_label <- .resolved_prior_broadcast_label(br, digits)
-
-    if (means_eq && sds_eq && !autos_any) {
-      # Broadcast summary
-      cat(sprintf("  %s applied to all %d covariate(s)\n",
-                  broadcast_label, length(br$mean)))
-    } else {
-      # Per-coefficient table
-      tbl <- data.frame(
-        coefficient = br$covariate_names,
-        mean = round(br$mean, digits),
-        scale = round(br$sd,  digits),
-        autoscaled = br$autoscale,
-        sd_x = round(br$sd_x, digits),
-        stringsAsFactors = FALSE
-      )
-      cat(sprintf("  Family: %s%s\n", family_label,
-                  if (br$dist == 1L) sprintf(" (df = %g)", br$df) else ""))
-      print(tbl, row.names = FALSE)
-      if (autos_any) {
-        cat("  (scale = user_scale / sd_x for autoscaled rows)\n")
-      }
+  # The relaxed model's comparator coefficients can carry their own prior.
+  if (!is.null(priors$beta_comparator_resolved)) {
+    .print_beta_prior_block(
+      "Comparator regression coefficients (beta_comparator):",
+      priors$beta_comparator_resolved, priors$beta_comparator, digits
+    )
+    if (!isTRUE(priors$beta_comparator_resolved$user_specified)) {
+      cat("  (not set; reuses the `beta` prior above)\n\n")
     }
   }
-  .print_default_tag(priors$beta)
-  cat("\n")
 
   # Sigma (normal family only)
   if (!is.null(priors$sigma)) {
-    cat("Residual SD (sigma, half-distribution via <lower=0>):\n")
+    cat("Residual SD (sigma, ", .constrained_prior_label(priors$sigma),
+        "):\n", sep = "")
     cat("  ", .format_prior(priors$sigma, digits = digits), "\n", sep = "")
     .print_default_tag(priors$sigma)
+    .print_outcome_scaled(priors$sigma, priors$sigma_resolved,
+                          priors$outcome_sd, digits)
+    cat("\n")
+  }
+
+  # Survival baseline: `aux` is the parametric shape or scale, `smooth` the
+  # random-walk SD of a flexible baseline.
+  if (!is.null(priors$aux)) {
+    aux_label <- .constrained_prior_label(priors$aux)
+    label <- if (is.null(priors$aux2)) {
+      paste0("Survival auxiliary (shape / scale, ", aux_label, "):")
+    } else {
+      paste0("Survival auxiliary 1 (gengamma sigma, ", aux_label, "):")
+    }
+    cat(label, "\n", sep = "")
+    cat("  ", .format_prior(priors$aux, digits = digits), "\n", sep = "")
+    .print_default_tag(priors$aux)
+    cat("\n")
+  }
+  # Generalized gamma only.
+  if (!is.null(priors$aux2)) {
+    cat("Survival auxiliary 2 (gengamma k = 1 / Q^2, where Q is the Lawless\n")
+    cat("  shape; ", .constrained_prior_label(priors$aux2), "):\n",
+        sep = "")
+    cat("  ", .format_prior(priors$aux2, digits = digits), "\n", sep = "")
+    .print_default_tag(priors$aux2)
+    cat("\n")
+  }
+  if (!is.null(priors$smooth)) {
+    cat("Survival baseline smoothing (random-walk SD, ",
+        .constrained_prior_label(priors$smooth), "):\n", sep = "")
+    cat("  ", .format_prior(priors$smooth, digits = digits), "\n", sep = "")
+    .print_default_tag(priors$smooth)
     cat("\n")
   }
 
@@ -112,7 +125,7 @@ prior_summary.mlumr_fit <- function(object, digits = 3, ...) {
 }
 
 
-#' @keywords internal
+#' @noRd
 .format_prior <- function(prior, digits = 3) {
   if (is.null(prior$distribution)) {
     return("<missing prior>")
@@ -133,7 +146,7 @@ prior_summary.mlumr_fit <- function(object, digits = 3, ...) {
   )
 }
 
-#' @keywords internal
+#' @noRd
 .format_prior_collection <- function(prior, digits = 3) {
   if (is_single_prior(prior) || is.null(prior)) {
     return(.format_prior(prior, digits = digits))
@@ -146,7 +159,24 @@ prior_summary.mlumr_fit <- function(object, digits = 3, ...) {
   "<missing prior>"
 }
 
-#' @keywords internal
+#' Show a default prior as the model used it, in outcome units
+#'
+#' Prints nothing when the model used the prior as written.
+#' @param user,resolved The prior as passed and as used.
+#' @param sd_y The IPD outcome SD the default was multiplied by.
+#' @noRd
+.print_outcome_scaled <- function(user, resolved, sd_y, digits) {
+  if (is.null(resolved) || is.null(sd_y) ||
+        isTRUE(all.equal(resolved$sd, user$sd))) {
+    return(invisible())
+  }
+  cat("  used as ", .format_prior(resolved, digits = digits),
+      ", the default times the IPD outcome SD (",
+      format(sd_y, digits = digits), ")\n", sep = "")
+  invisible()
+}
+
+#' @noRd
 .print_default_tag <- function(prior) {
   if (isTRUE(prior$default) && !is.null(prior$version)) {
     cat("  (package default, mlumr ", prior$version, ")\n", sep = "")
@@ -154,8 +184,72 @@ prior_summary.mlumr_fit <- function(object, digits = 3, ...) {
 }
 
 
+
+#' Print one resolved regression-coefficient prior block
+#'
+#' `beta` and `beta_comparator` are reported the same way, so the broadcast /
+#' per-coefficient decision, the autoscaling footnote and the default tag are
+#' written once. `resolved` is the per-coefficient struct stored on the fit;
+#' `user_prior` is what the caller passed, used for the fallback on older fits
+#' that carry no resolved struct and for the package-default tag.
+#' @noRd
+.print_beta_prior_block <- function(heading, resolved, user_prior, digits) {
+  cat(heading, "\n", sep = "")
+  if (is.null(resolved)) {
+    # Fallback for older fits: just print the user-specified prior.
+    cat(paste0("  ", .format_prior_collection(user_prior, digits = digits)),
+        sep = "\n")
+    cat("\n")
+  } else {
+    # Detect whether the resolved per-coefficient priors are homogeneous.
+    means_eq <- length(unique(round(resolved$mean, 12))) == 1L
+    sds_eq   <- length(unique(round(resolved$sd,   12))) == 1L
+    autos_any <- any(resolved$autoscale)
+    # The outcome-SD factor of a normal identity-link fit; absent on older fits.
+    y_scaled <- !is.null(resolved$sd_y) & resolved$sd_y != 1
+    sd_y <- if (any(y_scaled)) resolved$sd_y[y_scaled][[1L]] else NULL
+
+    family_label <- .resolved_prior_family_label(resolved$dist)
+    broadcast_label <- .resolved_prior_broadcast_label(resolved, digits)
+
+    if (means_eq && sds_eq && !autos_any) {
+      # Broadcast summary
+      cat(sprintf("  %s applied to all %d covariate(s)\n",
+                  broadcast_label, length(resolved$mean)))
+    } else {
+      # Per-coefficient table
+      tbl <- data.frame(
+        coefficient = resolved$covariate_names,
+        mean = round(resolved$mean, digits),
+        scale = round(resolved$sd,  digits),
+        autoscaled = resolved$autoscale,
+        sd_x = round(resolved$sd_x, digits),
+        stringsAsFactors = FALSE
+      )
+      cat(sprintf("  Family: %s%s\n", family_label,
+                  if (resolved$dist == 1L) sprintf(" (df = %g)", resolved$df) else ""))
+      print(tbl, row.names = FALSE)
+      if (autos_any) {
+        cat(if (is.null(sd_y)) {
+          "  (scale = user_scale / sd_x for autoscaled rows)\n"
+        } else {
+          "  (scale = user_scale * sd_y / sd_x for autoscaled rows)\n"
+        })
+      }
+    }
+    if (!is.null(sd_y)) {
+      cat(sprintf(paste0("  (sd_y = %s is the IPD outcome SD; the identity ",
+                         "link puts\n   the coefficients in outcome units)\n"),
+                  format(sd_y, digits = digits)))
+    }
+  }
+  .print_default_tag(user_prior)
+  cat("\n")
+}
+
+
 #' Validate prior_summary digits
-#' @keywords internal
+#' @noRd
 .validate_prior_summary_digits <- function(digits) {
   valid <- is.numeric(digits) &&
     length(digits) == 1L &&
@@ -172,7 +266,7 @@ prior_summary.mlumr_fit <- function(object, digits = 3, ...) {
 
 
 #' Validate resolved beta-prior metadata stored on a fit
-#' @keywords internal
+#' @noRd
 .validate_resolved_beta_prior <- function(br) {
   required <- c("mean", "sd", "dist", "df", "autoscale", "sd_x",
                 "covariate_names")
@@ -205,7 +299,7 @@ prior_summary.mlumr_fit <- function(object, digits = 3, ...) {
     stop("Resolved beta prior metadata is malformed.", call. = FALSE)
   }
   if (!is.numeric(br$dist) || length(br$dist) != 1L ||
-      !is.finite(br$dist)) {
+        !is.finite(br$dist)) {
     stop("Resolved beta prior distribution code is malformed.", call. = FALSE)
   }
   if (!is.numeric(br$df) || length(br$df) != 1L || !is.finite(br$df)) {
@@ -219,7 +313,7 @@ prior_summary.mlumr_fit <- function(object, digits = 3, ...) {
 
 
 #' Label a resolved Stan prior family code
-#' @keywords internal
+#' @noRd
 .resolved_prior_family_label <- function(dist) {
   switch(as.character(dist),
     "0" = "normal",
@@ -230,7 +324,7 @@ prior_summary.mlumr_fit <- function(object, digits = 3, ...) {
 
 
 #' Format a homogeneous resolved beta prior
-#' @keywords internal
+#' @noRd
 .resolved_prior_broadcast_label <- function(br, digits) {
   switch(as.character(br$dist),
     "0" = sprintf("normal(%s, %s)",
@@ -242,4 +336,27 @@ prior_summary.mlumr_fit <- function(object, digits = 3, ...) {
                   format(br$sd[[1L]], digits = digits)),
     sprintf("dist=%s(...)", br$dist)
   )
+}
+
+
+#' Describe how a positive-constrained prior is constrained
+#'
+#' An exponential is already positive, and only a zero-location normal or t
+#' truncated at zero is a half-normal or half-t.
+#' @param prior A prior specification list.
+#' @return A one-line character label for the constrained form.
+#' @noRd
+.constrained_prior_label <- function(prior) {
+  dist <- prior$distribution %||% ""
+  loc <- suppressWarnings(as.numeric(prior$mean %||% NA_real_))
+  centered <- isTRUE(is.finite(loc) && loc == 0)
+  if (identical(dist, "exponential")) {
+    "already positive; <lower=0> truncates nothing"
+  } else if (identical(dist, "normal")) {
+    if (centered) "half-normal via <lower=0>" else "normal truncated at 0"
+  } else if (identical(dist, "student_t")) {
+    if (centered) "half-t via <lower=0>" else "t truncated at 0"
+  } else {
+    "truncated to positive values via <lower=0>"
+  }
 }

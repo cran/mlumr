@@ -1,178 +1,327 @@
+# mlumr 0.2.0
+
+## Time-to-event outcomes
+
+* Feature: New `"survival"` outcome family. `set_ipd()` accepts time-to-event
+  data with right, left, interval and delayed-entry censoring through a
+  `survival::Surv()` object or `time`/`status`/`entry_time` columns, and
+  `set_agd_surv()` takes the comparator arm as reconstructed pseudo-IPD plus
+  its covariate moments. `outcome` is not required for this family.
+* Feature: Parametric and flexible baselines through the `distribution`
+  argument of `mlumr()`: proportional hazards (`"exponential"`, `"weibull"`,
+  `"gompertz"`), accelerated failure time (`"exponential-aft"`,
+  `"weibull-aft"`, `"lognormal"`, `"loglogistic"`, `"gamma"`, `"gengamma"`)
+  and flexible hazards (`"mspline"`, `"pexp"`) with a random-walk smoothing
+  prior. `make_knots()` places spline knots; `knots` accepts a custom set.
+* Feature: The baseline hazard is estimated per study by default
+  (`aux_by = ".study"`), each stratum with its own knots over its own
+  observed support, as `multinma::nma()` does. `aux_by = "none"` shares one
+  baseline across studies.
+* Feature: New priors `prior_aux`, `prior_aux2` (second generalized-gamma
+  auxiliary) and `prior_smooth`, with `default_prior_aux()` and
+  `default_prior_smooth()`.
+* Feature: `predict()` on a survival fit returns `"survival"`, `"hazard"`,
+  `"cumhaz"`, `"rmst"`, `"median"` and `"loghr"` curves. `times` picks
+  evaluation times (snapped to the fitted grid, with a message when they
+  move), `pred_times` sets the grid, `"median"` carries `p_not_reached`, and
+  RMST rows carry their `horizon`. `conditional_effects()` and
+  `conditional_predict()` give covariate-conditional versions.
+* Feature: `marginal_effects()` reports survival effects on the natural scale:
+  the hazard ratio (`HR`) for proportional-hazards fits, the time ratio (`TR`)
+  for shared-shape AFT fits, the exponentiated contrast (`EXP_DELTA_ETA`)
+  otherwise, plus the RMST difference (`RMSTD`) and ratio (`RMSTR`). Marginal
+  hazard ratios carry an `at_time` column because they are time-varying and
+  non-collapsible; `predict(type = "loghr")` gives the whole curve.
+* Improvement: An effect a fit cannot supply is an error naming the
+  alternative, not a substitution: `effect = "tr"` on a proportional-hazards
+  fit, `effect = "hr"` on an AFT fit, and either on a relaxed or
+  study-specific-shape AFT fit.
+* Feature: Survival benchmarks. `naive()` returns the unadjusted Cox log
+  hazard ratio and refuses a partial likelihood with no maximum or no
+  convergence. `stc()` returns the RMST difference by parametric
+  G-computation with `flexsurv`, with a bootstrap interval (`n_boot`,
+  default 200) and an `rmst_horizon` argument.
+* Feature: `survival_unit` on `calculate_loo()`, `calculate_waic()` and
+  `compare_models()` chooses what one held-out unit is for the reconstructed
+  comparator: `"observation"` (default, optimistic), `"arm"` or
+  `"aggregate"`.
+* Improvement: Coefficient rows in `summary()` are labeled by covariate name
+  (`beta[age]`, `beta_index[age]`, `beta_comparator[age]`); the stored
+  `variable` strings are unchanged.
+* Fix: Interval- and left-censored likelihoods under delayed entry are
+  evaluated in whichever of the difference, increment or quadrature forms
+  keeps its digits, and the exponential, Weibull, Gompertz and log-logistic
+  use closed forms. See `?mlumr`.
+* Fix: `mlumr()` refuses an M-spline basis column that no subject was at risk
+  under, judged over the merged `[entry, exit]` intervals of each study, and
+  refuses a shared baseline (`aux_by = "none"`) whose studies never overlap
+  on a spline column. See `?mlumr`.
+* Improvement: `predict(type = "rmst")` and `predict(type = "median")` warn
+  when the prediction grid is too coarse to trust and point at a finer
+  `n_rmst_grid` or `pred_times`.
+* Improvement: `?set_agd_surv` states that reconstruction uncertainty is not
+  propagated and which population the covariate moments must describe under
+  delayed entry.
+
+## Transport to any target population
+
+* Feature: A `newdata` argument on `marginal_effects()` and `predict()`
+  standardizes effects and absolute predictions to an arbitrary target
+  population by Bayesian g-computation, for every family. Standardizing to the
+  index covariates reproduces `population = "index"` exactly. Survival RMST
+  effects and absolute predictions transport; the marginal hazard ratio is
+  reported for a target too, with its `at_time`.
+* Improvement: `marginal_effects()` on a relaxed fit queried for the index
+  population prints a one-line note with the marginal posterior variance
+  change of `beta_comparator` per covariate, descriptive only. Silence it
+  with `options(mlumr.quiet_relaxed_index = TRUE)`.
+
+## Plotting
+
+* Feature: `plot()` methods for `marginal_effects()` (forest),
+  `predict()` (curves with credible bands, or point-intervals for scalar
+  types) and `conditional_effects()` (effects by profile). Each forest draws
+  the null its measure implies, uses a log axis for ratio measures, and reads
+  its interval level from the result.
+* Feature: `geom_km()` overlays the observed Kaplan-Meier curves on a model
+  survival plot, colored by treatment, honoring delayed entry, one panel per
+  population. It draws right-censored data only.
+* Feature: `plot_prior_posterior()` overlays each named parameter's posterior
+  on the prior the fit recorded for it.
+* Feature: `mlumr_forest()` draws a forest from a plain data frame, for mixed
+  comparisons such as `naive()`, `stc()` and both ML-UMR models on one axis;
+  a single very wide interval is clipped with an arrow instead of squeezing
+  the rest.
+* Improvement: `marginal_effects()`, `predict()` and `conditional_effects()`
+  return lightweight `data.frame` subclasses so the methods dispatch; data
+  frame behavior is unchanged.
+
+## Identification of the relaxed comparator coefficients
+
+* Feature: `check_identification()` reports, before fitting, whether the
+  aggregate subgroup rows can identify `beta_comparator` in
+  `model = "relaxed"`: the row count against `K + 1`, and the balance,
+  effective dimension and spread of the centered subgroup-mean matrix, with a
+  descriptive-only label for nonlinear links.
+* Feature: `prior_beta_comparator` argument to `mlumr()` sets a separate
+  prior on `beta_comparator`, including a different family. Defaults to
+  `prior_beta`; ignored for `model = "spfa"`; reported by `prior_summary()`
+  and swept by `prior_sensitivity()`.
+* Fix: The weak-identifiability warning no longer counts a duplicated
+  `set_agd()` row as evidence; it triggers on the rank of the mean design
+  under the identity link and on the number of distinct integration grids
+  otherwise.
+
+## Data preparation and integration
+
+* Fix: `distr()` honors arguments passed by position. `distr(qnorm, 10, 2)`
+  previously integrated a standard normal without any message. Positional
+  and abbreviated arguments are now matched against the quantile function's
+  formals at construction, and an argument matching nothing is an error.
+* Feature: Moment-parameterized `qgamma()`/`pgamma()`/`dgamma()` and
+  `qlogitnorm()`/`plogitnorm()`/`dlogitnorm()` accept `mean` and `sd`, so
+  `distr(qgamma, mean = age_mean, sd = age_sd)` works as printed in a
+  baseline table. Without those arguments they forward to `stats`. See
+  `?GammaDist` and `?logitNormal`.
+* Fix: `set_agd()` no longer rejects a valid binary covariate SD. The bound
+  was the population SD `sqrt(p (1 - p))`; it is now the finite-sample
+  maximum with a rounding allowance. See `?set_agd`.
+* Improvement: `set_agd()` requires `outcome_n` when normal aggregate data
+  have more than one row, and the multi-row comparator estimand for the
+  normal family is the sample-size-weighted mean of the strata rather than
+  an inverse-variance average. `naive()` and `stc()` use the same weights.
+* Improvement: `set_ipd()` warns about a rank-deficient or nearly collinear
+  covariate design and names the near-redundant covariates. Autoscaling of a
+  covariate with no usable empirical scale falls back to the unscaled prior
+  with a warning.
+* Fix: `add_integration()` rejects `cor_adjust = "pearson"` with
+  non-Gaussian margins, warns about a nonbinary discrete margin (count or
+  ordered category) that the copula correction does not cover, and warns when
+  a supplied `distr()` grossly contradicts the declared `set_agd()` moments.
+* Improvement: `check_integration()` compares realized and target correlations
+  on the same method (Pearson or Spearman), reports fidelity of each grid
+  margin to the declared mean and SD, lists which correlation pairs it could
+  and could not measure (`correlation_pairs`, with `"partial"` and `"review"`
+  verdicts), withholds the comparison under `cor_adjust = "none"`, and reports
+  a comparison it could not make as `"unavailable"` instead of `"close"`.
+
+## Priors and sensitivity
+
+* Breaking: for `family = "normal"` the default priors are on the outcome's
+  scale. Under the identity link the intercepts and coefficients are in the
+  outcome's units, and the residual SD is under either link, so the fixed
+  `normal(0, 10)` intercept and half-normal(0, 2.5) residual-SD defaults were
+  informative for an outcome such as a 0 to 100 score or a blood pressure in
+  mmHg. They pulled each intercept toward zero, the comparator's (resting on
+  one aggregate mean) the most, which moved the mean difference, and they
+  understated the residual SD, which narrowed the intervals. With `sd(y)` the
+  IPD outcome SD, the defaults are now `normal(0, 10 * sd(y))` for the
+  intercepts and `normal(0, 2.5 * sd(y))` for the coefficients (identity
+  link), and a half-normal with scale `2.5 * sd(y)` for the residual SD
+  (either link); `autoscale = TRUE` multiplies a coefficient's scale by
+  `sd(y)` as well as dividing it by `sd(x)` under the identity link. Priors
+  written out in full are used as given. `prior_summary()` prints the scales
+  the model used, and `prior_sensitivity()` sweeps a default or autoscaled
+  `prior_beta` in the same outcome-SD units. Refit normal-family analyses
+  that relied on the defaults or on `autoscale`.
+* Fix: `prior_normal(autoscale = TRUE)` rescales the prior location as well
+  as the scale, so a nonzero prior mean is on the covariate's own scale.
+* Improvement: `prior_sensitivity()` varies the prior and nothing else: every
+  model-defining setting is replayed from the fit and `...` may not override
+  it. Relaxed fits sweep the comparator prior alongside the index one
+  (`prior_beta_comparator_scales`, reported in `scale_comparator`), survival
+  rows carry `effect` and `at_time`, and a refit that cannot replay a sampler
+  argument the original fit used (such as `thin` or `init`) warns and names
+  it.
+* Breaking: `prior_sensitivity()` quantile columns are named `q2.5`, `q50`,
+  `q97.5`, matching `marginal_effects()`, rather than `q2` and `q98`. Duplicate
+  `probs` are refused.
+* Improvement: `prior_sensitivity()` no longer claims a scale sweep proves the
+  inference is data-driven; its interpretation text points at
+  `check_identification()`.
+* Fix: `prior_summary()` names constrained priors correctly: a truncated
+  normal or t with a nonzero location is not a half-normal or half-t, and an
+  exponential is not truncated at all.
+
+## Benchmarks: `naive()` and `stc()`
+
+* Breaking: `stc()` no longer reports an index-population contrast. That
+  estimate assumed a constant link-scale effect, which population adjustment
+  exists to avoid. `stc()` returns the comparator-population estimand only;
+  use `mlumr()` when the index population is the target.
+* Breaking: A normal-family `stc()` under a log link reports the log mean
+  ratio in `$estimate` and the mean difference in `$md`, `$md_se`,
+  `$md_lower`, `$md_upper`. Under the identity link the two coincide.
+* Fix: `stc()` refuses a binomial outcome model with complete separation and,
+  when `detectseparation` is installed, tests exactly for quasi-complete
+  separation; the result records a `separation` status. A Poisson model with
+  no events is refused the same way. See `?stc`.
+* Fix: Directly observed arm proportions and rates in `naive()`, and the
+  observed comparator proportion in a binomial `stc()`, use exact
+  Clopper-Pearson and Garwood intervals instead of Wald intervals, which
+  excluded the truth at zero counts. Contrasts remain Wald.
+* Fix: `naive()` combines several aggregate rows as strata; the comparator
+  standard error is that of the size-weighted mean of the row proportions.
+* Fix: `naive()` and `stc()` apply a continuity correction only to an
+  observed proportion of 0 or 1 instead of clamping every proportion, which
+  slightly changes the reported effect for arms with no events or no
+  non-events.
+
+## Fitting, diagnostics and model comparison
+
+* Breaking: `mlumr()` gains model-defining arguments ahead of `chains`,
+  `iter` and the other sampler controls. Pass sampler settings by name.
+* Improvement: `mlumr()` centers covariates by default (`center = TRUE`),
+  which removes the intercept-versus-slope collinearity that pushed the
+  sampler into deep trajectories on raw-scale covariates. Reported contrasts
+  are unchanged; `prior_intercept` then applies at the pooled covariate mean.
+  `qr = TRUE` offers a QR-rotated design instead.
+* Improvement: The binary, continuous and count IPD likelihoods use Stan's
+  fused GLM densities on their canonical links; results agree with 0.1.0 to
+  Monte Carlo error.
+* Fix: With the cmdstanr engine, `fit$summary$se_mean` is the Monte Carlo
+  standard error of the posterior mean from `posterior::mcse_mean()`. It was
+  the posterior SD over the square root of the bulk ESS, which is computed on
+  rank-normalized draws and misstates the error for skewed quantities such as
+  a ratio.
+* Fix: `mlumr()` refuses a normal fit whose outcome is constant or reproduced
+  exactly by its covariates, where the posterior for the residual SD is
+  improper, and warns when the design is saturated.
+* Fix: Marginal probabilities, means, rates and their contrasts are formed on
+  the log scale; the `safe_logit()` and `safe_divide()` clamps are gone, so
+  ratios with a near-zero comparator are no longer understated and `lor_*`
+  is finite where it used to hit the clamp. A ratio beyond double precision
+  is `Inf`. See `?mlumr-numerical-evaluation`.
+* Breaking: `predict(type = "link")` returns the marginal link
+  `g(E[g^-1(eta)])` rather than the mean linear predictor `E[eta]`; the two
+  agree for the identity link only. This differs from `multinma` on purpose,
+  since every effect mlumr reports is population-standardized.
+* Improvement: `seed = NULL` uses the documented default of 2026 with a
+  warning instead of drawing an unrecorded seed from the session RNG.
+* Improvement: `verbose = FALSE` silences the cmdstanr sampler banner as well.
+* Fix: A caller's rstan `control` list is merged with the backend's instead
+  of failing argument matching.
+* Fix: A cmdstanr run that produced no draws reports how many chains wrote
+  nothing and where CmdStan's messages are, instead of failing inside
+  `checkmate` on a temporary path.
+* Fix: The cmdstanr executable cache key now covers every `#include`, the
+  CmdStan version and its build flags; a changed include no longer reuses a
+  stale executable. Expect one recompile after upgrading.
+* Fix: `check_diagnostics()` and the fit summary no longer drop an infinite
+  Rhat before taking the maximum, report missing or non-numeric diagnostics
+  as unknown rather than as zero, and compute tail ESS.
+* Improvement: `predict()`, `marginal_effects()`, `conditional_effects()` and
+  `conditional_predict()` warn once per call when `NA` or `NaN` draws were
+  dropped from a summary.
+* Fix: `conditional_predict()` names quantile columns from the requested
+  probabilities, so non-round `probs` no longer return `NA`.
+* Fix: `calculate_loo()` refuses `moment_match = TRUE`, which `loo` ignores
+  for a matrix.
+* Fix: `compare_models()` with `"loo"` or `"waic"` refuses fits whose stored
+  outcomes differ. `loo_compare()` pairs the pointwise scores by position, so
+  the same data fitted in another row order gave a wrong `se_diff`. The
+  `calculate_loo()` and `calculate_waic()` results carry the outcomes as
+  `loo`'s `yhash`, so `loo::loo_compare()` warns on the same mismatch.
+* Improvement: The `compare_models()` printout no longer presents
+  `se_diff > 2` as a decision rule.
+
+## Example data and documentation
+
+* Feature: Bundled datasets derived from published trials replace the
+  invented data of 0.1.0: `psoriasis_ipd`/`psoriasis_agd` (binary),
+  `shoulder_ipd`/`shoulder_agd` (continuous), `caries_ipd`/`caries_agd`
+  (count) and `ndmm_ipd`/`ndmm_agd`/`ndmm_agd_covs` (survival). Provenance
+  and known quirks are on each help page;
+  `data-raw/prepare_multinma_subsets.R` rebuilds them.
+* Improvement: Nine outcome-focused vignettes (`introduction`,
+  `data-preparation`, `binary-outcomes`, `continuous-outcomes`,
+  `count-outcomes`, `survival-outcomes`, `subgroup-identification`,
+  `fitting-and-diagnostics`, `choosing-a-method`), precompiled through
+  `R.rsp` so no Stan model runs at check time.
+* Improvement: `?set_agd` states what an aggregate Poisson row assumes about
+  exposure, and the `shoulder` and `caries` help pages describe their
+  reference comparison as an estimate rather than a known truth.
+* Improvement: The README and vignettes state that ML-UMR is for single-arm
+  indirect comparisons of fully disconnected evidence, and that each worked
+  example builds hypothetical single-arm trials from randomized trials only to
+  illustrate the method; randomized trials connected through a common arm call
+  for ML-NMR or another appropriate method. `vignette("count-outcomes")` explains why its SPFA rate
+  ratio is the same in both populations and at every covariate profile (a
+  directly transportable effect), and the README states that the marginal
+  hazard ratio varies over time even when both studies share one baseline shape.
+* Feature: New hex-sticker logo with a broken-anchor motif.
+
+## Dependencies
+
+* `splines2` and `survival` added to Imports; `ggplot2` moved from Suggests
+  to Imports (`>= 3.4.0`).
+* `flexsurv`, `detectseparation`, `ggsurvfit` and `R.rsp` added to Suggests.
+* `copula` is no longer imported: the Gaussian-copula integration points are
+  built from the Cholesky factor in base R.
+* `Additional_repositories` is pinned to `https://mc-stan.org/r-packages`
+  so that `rstan` and `StanHeaders` resolve from one source. cmdstanr itself
+  comes from `https://stan-dev.r-universe.dev`; `mlumr_engine("cmdstanr")`
+  offers to install it from there.
+
 # mlumr 0.1.0
 
 Initial CRAN release.
 
-## Core models
-
-* **ML-UMR models**: Bayesian multilevel unanchored meta-regression with
-  two model variants:
-    - SPFA (Shared Prognostic Factor Assumption): shared covariate effects
-      across treatments
-    - Relaxed SPFA: treatment-specific covariate coefficients allowing
-      effect modification estimation
-
-* **Three outcome families**: binary (binomial), continuous (normal), and
-  count (Poisson) outcomes, each with appropriate link functions:
-    - Binomial: logit (default), probit, cloglog
-    - Normal: identity (default), log
-    - Poisson: log
-
-* **Dual Stan backend**: rstan (default, CRAN-compatible) with optional
-  cmdstanr support. Switch engines with `mlumr_engine("cmdstanr")`, which
-  guides installation of cmdstanr and CmdStan if needed. Per-call override
-  via the `engine` argument in `mlumr()`.
-
-* **Simulated Treatment Comparison (STC)**: Frequentist outcome regression
-  via parametric G-computation with delta-method standard errors. Supports
-  prediction at covariate means or marginalization over full covariate
-  distributions using integration points.
-
-* **Naive unadjusted estimate**: Benchmark comparison of crude outcome
-  summaries with delta-method confidence intervals.
-
-## Data preparation
-
-* `set_ipd()`, `set_agd()`, and `combine_data()` provide a
-  unified interface for preparing IPD and AgD for all three methods.
-* `set_ipd()` rejects covariate names that collide with reserved
-  internal columns (`.outcome`, `.study`, `.trt`, `.exposure`) so user
-  values cannot be silently overwritten by the standardized frame.
-* `set_agd()` applies the same check to its covariate mean/SD columns
-  (`.n`, `.r`, `.y`, `.se`, `.study`, `.trt`, `.E`) and additionally
-  rejects `cov_means` entries that collapse to duplicate names after
-  stripping the `_mean` / `_prop` suffix (e.g. `c("age_mean", "age")`).
-* `add_integration()` generates Sobol-sequence quasi-Monte Carlo
-  integration points with a Gaussian copula to account for covariate
-  correlations, enabling accurate marginalization over the AgD covariate
-  distribution.
-* `mlumr()`, `add_integration()`, `check_integration()`, and
-  `prior_sensitivity()` include `verbose` controls so scripts and
-  tests can suppress package-level progress output while retaining warnings.
-* The public API mirrors the function names used by the related
-  `multinma` package for the data-setup, integration, and
-  effect-summary workflow (`set_ipd()`, `set_agd()`,
-  `add_integration()`, `unnest_integration()`, `distr()`,
-  `marginal_effects()`, `qbern()`/`pbern()`/`dbern()`). Users
-  familiar with ML-NMR can transfer their muscle memory directly to
-  ML-UMR. When both packages are attached in the same R session R
-  issues masking warnings on the shared names; disambiguate with
-  `mlumr::function()` / `multinma::function()`.
-
-## Prior system
-
-* Prior constructors `prior_normal(mean, sd)`, `prior_student_t(df, mean, sd)`,
-  `prior_cauchy(mean, sd)` (alias for `prior_student_t(df = 1, ...)`), and
-  `prior_exponential(rate)`. All six Stan models branch on the prior
-  family at runtime, so any of these can be supplied to `prior_intercept`,
-  `prior_beta`, or (normal family only) `prior_sigma`.
-* `prior_beta` accepts either a single prior (broadcast to all covariates)
-  or a list of per-coefficient priors. Per-coefficient priors must share
-  the same family and df (Stan branches on a single dist code).
-* `prior_normal()`, `prior_student_t()`, and `prior_cauchy()` carry an
-  `autoscale` argument. When passed as `prior_beta` with
-  `autoscale = TRUE`, each coefficient's prior scale is divided by the
-  empirical SD of its covariate (Gelman et al., 2008).
-  `autoscale = FALSE` by default.
-* Default priors follow the Stan community's prior-choice recommendations
-  (Vehtari et al., 2025):
-    - `prior_intercept`: `prior_normal(0, 10)`
-    - `prior_beta`: `prior_normal(0, 2.5)` (weakly informative; Gelman et al.,
-      2008)
-    - `prior_sigma`: `prior_normal(0, 2.5)` (half-normal via the `<lower=0>`
-      constraint in Stan) for the normal family.
-* `default_prior_intercept()`, `default_prior_beta()`, and
-  `default_prior_sigma()` accessors expose the package defaults. Values
-  are tagged with `$default = TRUE` and the package `$version` so
-  `prior_summary()` can report whether each prior is a default and which
-  mlumr version produced it.
-* `prior_summary()` S3 generic + `prior_summary.mlumr_fit()` method for
-  human-readable introspection of every prior used in a fit, including
-  post-autoscale per-coefficient scales.
-* `prior_sensitivity()` refits a model across a grid of `prior_beta`
-  scales and returns a posterior-summary table — the workflow recommended
-  by Vehtari et al.'s prior-choice wiki for judging data- vs prior-driven
-  inference.
-
-## Inference helpers
-
-* `predict.mlumr_fit()` returns population-specific predicted outcomes.
-* `marginal_effects()` returns posterior treatment-effect summaries.
-* `conditional_effects()` returns covariate-conditional treatment
-  effects.
-* `conditional_predict()` returns predictions at specific covariate
-  values.
-* `predict.mlumr_fit()` and `conditional_effects()` document the
-  Jensen's-inequality gap on non-identity links: response-scale summaries
-  are `E[g^{-1}(eta)]`, not `g^{-1}(E[eta])`.
-
-## Model comparison
-
-* `calculate_dic()` for DIC-based comparison (no extra dependencies).
-* `calculate_loo()` and `calculate_waic()` using the optional `loo`
-  package for PSIS-LOO and WAIC (Vehtari, Gelman, Gabry, 2017). `loo`
-  is in `Suggests`, not `Imports`.
-* `compare_models()` accepts `criterion = c("dic", "loo", "waic")`,
-  defaulting to `"dic"`.
-* All six Stan models produce pointwise log-likelihood vectors
-  (`log_lik_ipd`, `log_lik_agd`) — the standard contract for
-  `loo::loo()` / `loo::waic()`.
-
-## Sampling
-
-* Regression coefficients `beta` (and `beta_comparator` in relaxed
-  models) are sampled via an affine (non-centered) reparameterization:
-  `z_beta ~ std_* (0, 1)`, `beta = prior_beta_mean + prior_beta_sd .* z_beta`.
-  This decouples HMC adaptation from the prior scale and typically
-  improves mixing when the prior scale is mis-matched with the
-  posterior scale.
-
-## Diagnostics
-
-* Automatic MCMC diagnostic checks (divergences, Rhat, ESS, treedepth)
-  via `check_diagnostics()`.
-* `check_integration()` provides a `check_joint` argument that
-  compares pairwise correlation matrices at the current vs doubled `n_int`
-  (and against the user-supplied correlation target when available).
-
-## Stan internals
-
-* Stan prior hyperparameter declarations are shared across all six
-  models via `#include include/priors_hyperparameters.stan` and
-  `include/priors_sigma_hyperparameters.stan`. Prior log-density
-  dispatchers live in `include/priors_functions.stan`.
-* Binary-link numerical helpers are shared by the binary SPFA and relaxed
-  models via `include/binary_functions.stan`.
-* `E_ipd` in the two Poisson Stan models carries `<lower=0>` so
-  off-API consumers who assemble `stan_data` manually get a Stan
-  validation error rather than `log(0) = -Inf` on a non-positive
-  exposure.
-* Internal reference page `?mlumr-numerical-guards` documents
-  `safe_logit`, `safe_divide`, and the `<lower=0>` Stan guards.
-
-## Documentation
-
-* A package startup message reports the installed mlumr version and GitHub
-  repository when the package is attached.
-* `?mlumr-package` provides a full overview of the typical workflow
-  (data preparation -> integration -> fit -> diagnostics -> inference) and
-  points at the alternative methods (`stc()`, `naive()`).
-* `@seealso` cross-links across `predict.mlumr_fit()`,
-  `marginal_effects()`, `conditional_effects()`,
-  `conditional_predict()`, `prior_summary()`, and
-  `prior_sensitivity()`.
-* Six vignettes covering data preparation, ML-UMR models, STC and
-  naive benchmarks, method comparison, and a complete worked example.
-  Vignettes run compact examples during package checks; intentionally failing
-  demonstrations and longer production-style fits remain non-executed.
-
-## Testing
-
-* Test coverage spans data setup, integration, link functions, priors,
-  prior summaries, prior sensitivity, engine selection, diagnostics,
-  prediction, conditional effects, ML-UMR validation, fitted-model behavior,
-  STC, naive benchmarks, utility functions, and LOO/WAIC/DIC model
-  comparison.
-* The test suite includes reserved-name guards, duplicate covariate-name
-  checks, standardized-frame shape checks, pointwise log-likelihood
-  extraction, integration diagnostics, posterior-summary validation, and
-  family-specific behavior for binary, normal, and Poisson outcomes.
+* ML-UMR models for a disconnected two-study comparison: SPFA (shared
+  covariate effects) and relaxed SPFA (treatment-specific coefficients), for
+  binomial (logit, probit, cloglog), normal (identity, log) and Poisson (log)
+  outcomes.
+* rstan backend by default, optional cmdstanr through `mlumr_engine()` or the
+  `engine` argument.
+* `set_ipd()`, `set_agd()`, `combine_data()` and `add_integration()`
+  (Sobol quasi-Monte Carlo points with a Gaussian copula), mirroring the
+  `multinma` interface.
+* Prior constructors `prior_normal()`, `prior_student_t()`, `prior_cauchy()`
+  and `prior_exponential()`, per-coefficient priors, `autoscale`,
+  `prior_summary()` and `prior_sensitivity()`.
+* `predict()`, `marginal_effects()`, `conditional_effects()` and
+  `conditional_predict()`.
+* `calculate_dic()`, `calculate_loo()`, `calculate_waic()` and
+  `compare_models()`.
+* `check_diagnostics()` and `check_integration()`.
+* Frequentist benchmarks `stc()` (parametric G-computation) and `naive()`.

@@ -16,9 +16,16 @@ add_integration(
 \arguments{
 \item{data}{An \code{mlumr_data} object from \code{\link[=combine_data]{combine_data()}}}
 
-\item{n_int}{Number of integration points (default 64, powers of 2 recommended)}
+\item{n_int}{Number of integration points (default 64; use powers of 2).
+More points can improve quasi-Monte Carlo integration of the AgD likelihood
+and comparator-population estimands. Increase it when
+\code{\link[=check_integration]{check_integration()}} shows numerical sensitivity. Wider posterior
+intervals alone indicate neither an inadequate grid nor a need for more
+points. Larger values cost more sampling time.}
 
-\item{cor}{Correlation matrix for covariates. If \code{NULL}, computed from IPD.}
+\item{cor}{Correlation matrix for covariates, on the covariate scale. If
+\code{NULL} (the default) it is estimated from the IPD; see the
+correlation-transport note in Details.}
 
 \item{cor_adjust}{Adjustment method: \code{"spearman"}, \code{"pearson"}, or \code{"none"}}
 
@@ -32,6 +39,22 @@ An \code{mlumr_data} object with integration points added
 \description{
 Generate quasi-Monte Carlo integration points using Sobol sequences and a
 Gaussian copula to account for correlations between covariates in the AgD.
+}
+\details{
+\strong{The correlation structure is assumed to transport.} Aggregate data
+report marginal summaries only, so with \code{cor = NULL} the within-row
+correlation is estimated from the IPD and applied to every comparator
+row, as in ML-NMR (Phillippo et al. 2020). The assumption is untestable
+from the data; supply \code{cor} from an external source to vary it, and use
+\code{\link[=check_integration]{check_integration()}} to confirm the realized moments and correlations.
+
+\code{cor_adjust} maps the covariate-scale correlation onto the Gaussian copula:
+the Spearman map is exact for continuous margins, the Pearson map holds for
+Gaussian margins, and pairs involving a binary margin use
+prevalence-independent heuristics. A nonbinary discrete margin (a count or
+an ordered category) is treated as continuous and its realized association
+need not match the target; \code{add_integration()} warns when it sees one.
+\code{"none"} passes a latent Gaussian-copula matrix through unchanged.
 }
 \examples{
 \dontrun{

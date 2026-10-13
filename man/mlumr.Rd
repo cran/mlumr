@@ -11,6 +11,18 @@ mlumr(
   prior_intercept = default_prior_intercept(),
   prior_beta = default_prior_beta(),
   prior_sigma = default_prior_sigma(),
+  distribution = NULL,
+  prior_aux = NULL,
+  prior_smooth = NULL,
+  n_knots = 7L,
+  knots = NULL,
+  mspline_degree = NULL,
+  aux_by = ".study",
+  pred_times = NULL,
+  rmst_horizon = NULL,
+  n_rmst_grid = 100L,
+  center = TRUE,
+  qr = FALSE,
   chains = 4,
   iter = 2000,
   warmup = 1000,
@@ -20,6 +32,8 @@ mlumr(
   refresh = 200,
   engine = NULL,
   verbose = TRUE,
+  prior_beta_comparator = NULL,
+  prior_aux2 = NULL,
   ...
 )
 }
@@ -32,26 +46,104 @@ mlumr(
 
 \item{link}{Link function. For binomial: \code{"logit"} (default), \code{"probit"},
 or \code{"cloglog"}. For normal: \code{"identity"} (default) or \code{"log"}. For
-poisson: \code{"log"} (default, only option). If \code{NULL}, uses the canonical
-default for the family.}
+poisson and survival: \code{"log"} (default, only option). If \code{NULL}, uses the
+canonical default for the family.}
 
 \item{prior_intercept}{Prior for treatment intercepts. Default from
-\code{\link[=default_prior_intercept]{default_prior_intercept()}} (\code{prior_normal(0, 10)}, weakly informative
-on the linear-predictor scale). See \code{\link[=prior_normal]{prior_normal()}} for guidance.}
+\code{\link[=default_prior_intercept]{default_prior_intercept()}} (\code{prior_normal(0, 10)}), on the
+linear-predictor scale; for \code{family = "normal"} with the identity link,
+where the intercepts are in outcome units, \code{normal(0, 10 * sd(y))} with
+\code{sd(y)} the IPD outcome SD. See \code{\link[=prior_normal]{prior_normal()}}.}
 
-\item{prior_beta}{Prior for regression coefficients. May be a single
-prior broadcast to all covariates, or a \code{list} of priors of length
-\code{n_cov} for per-coefficient specification. All per-coefficient priors
-must share the same family and (for Student-t) df. Default from
-\code{\link[=default_prior_beta]{default_prior_beta()}} (\code{prior_normal(0, 2.5)}; Gelman et al. 2008;
-Stan community prior-choice wiki). Set \code{autoscale = TRUE} on the
-prior to divide the scale by each covariate's empirical SD — useful
-when predictors are on very different scales.}
+\item{prior_beta}{Prior for regression coefficients. A single prior
+broadcast to all covariates, or a \code{list} of priors of length \code{n_cov}
+sharing one family (and, for Student-t, one df). Default from
+\code{\link[=default_prior_beta]{default_prior_beta()}} (\code{prior_normal(0, 2.5)}, times \code{sd(y)} for
+\code{family = "normal"} with the identity link). Set \code{autoscale = TRUE}
+on the prior to divide the scale by each covariate's empirical SD (and,
+for the normal identity link, multiply it by \code{sd(y)}). For
+\code{model = "spfa"} this is the prior on the shared \code{beta}; for
+\code{model = "relaxed"} on \code{beta_index}, with \code{beta_comparator} taking
+\code{prior_beta_comparator}.}
 
 \item{prior_sigma}{Prior for residual SD (normal family only). Default
-from \code{\link[=default_prior_sigma]{default_prior_sigma()}} (\code{prior_normal(0, 2.5)}, half-normal via
-the Stan \verb{<lower=0>} constraint). \code{\link[=prior_exponential]{prior_exponential()}} is also
+from \code{\link[=default_prior_sigma]{default_prior_sigma()}}, a half-normal (through the Stan
+\verb{<lower=0>} constraint) with scale \code{2.5 * sd(y)}, the residual SD being
+in outcome units under either link. \code{\link[=prior_exponential]{prior_exponential()}} is also
 supported for sigma.}
+
+\item{distribution}{For \code{family = "survival"} only: the survival
+distribution. Proportional hazards: \code{"exponential"}, \code{"weibull"}
+(default), \code{"gompertz"} (positive shape, so an increasing hazard).
+Accelerated failure time: \code{"exponential-aft"}, \code{"weibull-aft"},
+\code{"lognormal"}, \code{"loglogistic"}, \code{"gamma"}, \code{"gengamma"} (the positive
+Lawless \code{Q} subfamily). Flexible baseline hazard: \code{"mspline"} and
+\code{"pexp"} (piecewise exponential). \code{"gengamma"} is the least numerically
+robust option, so inspect its MCMC diagnostics. Must be \code{NULL} for other
+families.}
+
+\item{prior_aux}{For \code{family = "survival"} parametric distributions: prior
+for the shape or scale parameter(s), half-normal, half-t or exponential
+through the \verb{<lower=0>} constraint. Default \code{\link[=default_prior_aux]{default_prior_aux()}}. The
+Gompertz shape has units of 1 / time, so set this explicitly for a
+Gompertz baseline and check it against the time unit.}
+
+\item{prior_smooth}{For \code{family = "survival"} flexible baselines
+(\code{"mspline"}/\code{"pexp"}): prior for the random-walk smoothing SD. Default
+\code{\link[=default_prior_smooth]{default_prior_smooth()}}.}
+
+\item{n_knots}{For \code{family = "survival"} flexible baselines: number of
+internal spline knots (default 7). See \code{\link[=make_knots]{make_knots()}}.}
+
+\item{knots}{Optional custom knots for a flexible survival baseline. With a
+shared baseline (\code{aux_by = "none"}), supply one \code{\link[=make_knots]{make_knots()}} result. With
+study-specific baselines, supply \code{list(index = ..., comparator = ...)},
+where each element has the same structure and coefficient count.}
+
+\item{mspline_degree}{For \code{family = "survival"} flexible baselines: spline
+degree override (default derived from \code{distribution}: 3 for \code{"mspline"},
+0 for \code{"pexp"}).}
+
+\item{aux_by}{For \code{family = "survival"}: how the baseline hazard is shared
+between the two studies, the unanchored analogue of \code{multinma::nma()}'s
+\code{aux_by}. \code{".study"} (the default, and what \code{NULL} means) gives each
+study its own baseline shape, with its own knots over its own observed
+support for a flexible baseline. \code{"none"} gives both studies one shared
+shape, a stronger assumption that buys precision; fit it as a
+sensitivity analysis when the two Kaplan-Meier curves plainly share a
+shape. Each study contributes one arm, so a study-specific and a
+treatment-specific baseline shape cannot be told apart, and a stratified
+fit carries each study's shape with its treatment when predictions are
+transported; where that is doubtful, prefer the RMST estimands and
+report both settings. With the stratified default the marginal hazard
+ratio varies with time, so \code{\link[=marginal_effects]{marginal_effects()}} reports it at one
+\code{at_time}.}
+
+\item{pred_times}{For \code{family = "survival"}: times at which survival,
+hazard and cumulative-hazard predictions are produced. If \code{NULL}, a grid
+up to the maximum observed time is used.}
+
+\item{rmst_horizon}{For \code{family = "survival"}: the upper time limit for the
+restricted mean survival time. If \code{NULL}, the maximum observed time,
+except for a flexible baseline stratified by study, where it defaults to
+the follow-up both studies observed so the headline RMST does not
+extrapolate the shorter study. A longer horizon warns.}
+
+\item{n_rmst_grid}{For \code{family = "survival"}: number of equally spaced nodes
+(default \code{100}) on \verb{[0, rmst_horizon]} for the trapezoidal RMST integral.
+Increase for sharp early hazards or long horizons.}
+
+\item{center}{Logical (default \code{TRUE}). Center the covariates about the
+pooled IPD and population-weighted declared AgD means before fitting.
+The likelihood is unchanged and sampling is usually easier, but
+\code{prior_intercept} then applies to the intercept at the pooled covariate
+mean. Set \code{FALSE} to fit on the raw covariate scale. A fit whose
+centering rounds two integration points onto one is refused.}
+
+\item{qr}{Logical (default \code{FALSE}). Apply a thin-QR reparameterization to
+the combined design matrix, which decorrelates its columns for HMC. The
+priors still apply to the original coefficients. Useful with many
+correlated or ill-scaled covariates.}
 
 \item{chains}{Number of MCMC chains (default 4)}
 
@@ -59,7 +151,9 @@ supported for sigma.}
 
 \item{warmup}{Number of warmup iterations (default 1000)}
 
-\item{seed}{Random seed for reproducibility}
+\item{seed}{Random seed for reproducibility. If \code{NULL} (default), the fixed
+seed 2026 is used and a warning says so. The seed used is reported in the
+fitting messages.}
 
 \item{adapt_delta}{Target acceptance rate (default 0.95)}
 
@@ -73,6 +167,18 @@ uses the engine set by \code{\link[=mlumr_engine]{mlumr_engine()}}. See \code{\l
 \item{verbose}{Logical; if \code{FALSE}, suppresses mlumr progress messages.
 Stan sampler progress is still controlled by \code{refresh}.}
 
+\item{prior_beta_comparator}{Relaxed model only: prior for the
+comparator-arm coefficients \code{beta_comparator}, with the same
+specification rules as \code{prior_beta} and any supported family. \code{NULL}
+(the default) reuses \code{prior_beta}. \code{beta_comparator} is informed only by
+the aggregate likelihood, so a tighter prior here regularizes the
+index-population estimand; see \code{\link[=check_identification]{check_identification()}} and
+\code{\link[=prior_sensitivity]{prior_sensitivity()}}. Ignored for \code{model = "spfa"}.}
+
+\item{prior_aux2}{For \code{distribution = "gengamma"} only: prior for the
+second auxiliary parameter. \code{NULL} (the default) reuses \code{prior_aux}.
+Supplying it for any other distribution warns and has no effect.}
+
 \item{...}{Additional arguments passed to the Stan sampling function
 (\code{\link[rstan:sampling]{rstan::sampling()}} or cmdstanr's \verb{$sample()} method)}
 }
@@ -82,44 +188,41 @@ An object of class \code{mlumr_fit}
 \description{
 Fit a Bayesian multilevel unanchored meta-regression model using individual
 patient data (IPD) and aggregate data (AgD). Supports binary, continuous,
-and count outcomes.
+count, and time-to-event outcomes.
 }
 \details{
 The model assumes that all AgD rows come from the same comparator treatment
-and that, conditional on covariates, there is no between-study heterogeneity.
-If AgD rows come from multiple studies with different designs or unmeasured
-confounders, this assumption may not hold. No random effects for study-level
-heterogeneity are included.
+and that, conditional on covariates, there is no between-study
+heterogeneity. No random effects for study-level heterogeneity are
+included.
 
-\strong{AgD scale assumptions (family = \code{"normal"}).} The AgD likelihood is
+\strong{AgD scale (family = \code{"normal"}).} The AgD likelihood is
 \code{y_agd ~ normal(E[exp(eta)], se_agd)} under \code{link = "log"} and
-\code{y_agd ~ normal(E[eta], se_agd)} under \code{link = "identity"}. In both
-cases \code{set_agd()} expects \code{outcome_mean} and \code{outcome_se} on the
-\strong{arithmetic (original, untransformed) scale}, not log-scale or
-geometric. Passing log-scale summaries silently misspecifies the
-likelihood. See \code{\link[=set_agd]{set_agd()}} for details.
+\code{y_agd ~ normal(E[eta], se_agd)} under \code{link = "identity"}; in both cases
+\code{\link[=set_agd]{set_agd()}} expects \code{outcome_mean} and \code{outcome_se} on the arithmetic
+scale.
 
-\strong{Comparator-population weighting is family-dependent.} Integrated
-marginal predictions in the comparator population (\verb{*_comparator}
-generated quantities) are weighted by:
-\itemize{
-\item \strong{binomial}: \code{n_agd[k]} (AgD sample size), so larger
-AgD rows contribute more to the marginal mean.
-\item \strong{normal}: equal weights across AgD rows (\verb{/ n_agd_rows}),
-reflecting the normal likelihood's treatment of each row as a
-single summary statistic.
-\item \strong{poisson}: \code{E_agd[k]} (AgD exposure), matching the
-rate-based likelihood.
-}
-Each weighting is natural for the corresponding likelihood; users
-comparing marginal effects across families should be aware they are
-not identically weighted.
+\strong{The comparator population is the size-weighted mixture of its aggregate
+rows.} Comparator-population predictions weight each row by the
+population it represents: \code{n_agd} for binomial, \code{outcome_n} for normal
+(required for more than one row) and \code{E_agd} for poisson. These are
+mixing weights, separate from the likelihood's precision weights, so
+splitting a comparator population into subgroup rows leaves the estimand
+unchanged.
 
-\strong{Weakly-identified coefficients in the relaxed model} —
-\code{beta_comparator} is identified only through AgD, so the relaxed
-model needs informative priors (or many AgD rows) to estimate
-effect modification reliably. \code{\link[=prior_sensitivity]{prior_sensitivity()}} is the
-recommended diagnostic.
+\strong{Identifying the relaxed model.} \code{beta_comparator} is informed only by
+the aggregate likelihood. Jointly defined subgroup rows, one \code{\link[=set_agd]{set_agd()}}
+row per stratum, are what can separate it from the comparator intercept;
+a single aggregate summary constrains one combination of them. Use
+\code{\link[=check_identification]{check_identification()}} before fitting and \code{\link[=prior_sensitivity]{prior_sensitivity()}} after;
+the subgroup-identification vignette works through the geometry.
+
+\strong{Normal outcomes.} A normal fit whose IPD covariates reproduce the
+outcome exactly has an improper posterior for the residual SD, so
+\code{mlumr()} refuses a constant outcome and a least-squares fit that is exact
+to numerical precision (residual sum of squares at most 1e-12 of the
+total) before sampling, and warns when the design is saturated. Everything
+else is left to the sampler and its diagnostics.
 }
 \examples{
 \dontrun{
@@ -131,7 +234,6 @@ fit_relaxed <- mlumr(dat, model = "relaxed")
 }
 }
 \seealso{
-\code{\link[=prior_sensitivity]{prior_sensitivity()}} for sensitivity of the posterior
-to \code{prior_beta}; \code{\link[=set_agd]{set_agd()}} for AgD scale requirements;
-\code{\link[=prior_summary]{prior_summary()}} for introspection of the priors actually used.
+\code{\link[=prior_sensitivity]{prior_sensitivity()}}, \code{\link[=check_identification]{check_identification()}}, \code{\link[=set_agd]{set_agd()}},
+\code{\link[=prior_summary]{prior_summary()}}.
 }

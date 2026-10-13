@@ -5,6 +5,8 @@
 \alias{default_prior_intercept}
 \alias{default_prior_beta}
 \alias{default_prior_sigma}
+\alias{default_prior_aux}
+\alias{default_prior_smooth}
 \title{Default priors used by \code{\link[=mlumr]{mlumr()}}}
 \usage{
 default_prior_intercept()
@@ -12,16 +14,30 @@ default_prior_intercept()
 default_prior_beta()
 
 default_prior_sigma()
+
+default_prior_aux()
+
+default_prior_smooth()
 }
 \value{
 A prior list (see \code{\link[=prior_normal]{prior_normal()}}).
 }
 \description{
 These accessors return the current default priors used by \code{\link[=mlumr]{mlumr()}},
-tagged with \verb{$default = TRUE} and the package version. \code{\link[=prior_summary]{prior_summary()}}
+tagged with \verb{$default = TRUE} and the package version. For
+\code{family = "normal"} their scales are multiples of the IPD outcome SD
+wherever the parameter is in outcome units; see \code{\link[=prior_normal]{prior_normal()}}. \code{\link[=prior_summary]{prior_summary()}}
 prints the version so cross-release reproducibility is diagnosable: if a
 later release changes a default, fits produced with an older version
 will still carry the correct \verb{$version} tag.
+}
+\details{
+\code{default_prior_aux()} and \code{default_prior_smooth()} apply to the survival
+family only. \code{prior_aux} is a half-normal(0, 2) on the shape/scale
+parameter(s) of parametric survival distributions (Weibull/Gompertz/gamma
+shape, log-normal sdlog, generalized-gamma shapes). \code{prior_smooth} is a
+half-normal(0, 1) on the random-walk smoothing SD of the M-spline /
+piecewise-exponential baseline hazard.
 }
 \examples{
 default_prior_intercept()

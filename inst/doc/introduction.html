@@ -144,6 +144,28 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; }
 
 
 
+<style type="text/css">
+
+div.csl-bib-body { }
+div.csl-entry {
+clear: both;
+}
+.hanging div.csl-entry {
+margin-left:2em;
+text-indent:-2em;
+}
+div.csl-left-margin {
+min-width:2em;
+float:left;
+}
+div.csl-right-inline {
+margin-left:2em;
+padding-left:1em;
+}
+div.csl-indent {
+margin-left: 2em;
+}
+</style>
 
 <style type="text/css">body {
 background-color: #fff;
@@ -341,233 +363,81 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 
 
 
-<div id="overview" class="section level2">
-<h2>Overview</h2>
-<p><strong>mlumr</strong> implements multilevel unanchored
-meta-regression (ML-UMR) for indirect treatment comparisons using
-individual patient data (IPD) and aggregate data (AgD). It supports
-binary, continuous (normal), and count (Poisson) outcomes. It
-provides:</p>
-<ul>
-<li><strong>ML-UMR</strong> (Bayesian): SPFA and Relaxed SPFA models via
-Stan (<code>rstan</code> by default, with optional
-<code>cmdstanr</code>)</li>
-<li><strong>STC</strong>: Simulated treatment comparison via parametric
-G-computation</li>
-<li><strong>Naive</strong>: Unadjusted comparison as a benchmark</li>
-</ul>
-<p>Version 0.1.0 is a two-treatment package: one treatment is
-represented by IPD (the index treatment) and one by AgD (the comparator
-treatment). Multi-treatment unanchored networks are outside the current
-package scope.</p>
+<div id="what-mlumr-does" class="section level2">
+<h2>What mlumr does</h2>
+<p><strong>mlumr</strong> implements <strong>multilevel unanchored
+meta-regression (ML-UMR)</strong> for population-adjusted single-arm
+indirect treatment comparisons. It is for the situation where two
+treatments have never been compared in the same trial and there is
+<strong>no common comparator arm</strong> to anchor the comparison
+(single-arm trials, i.e., <em>fully disconnected</em> evidence), you
+hold individual patient data (IPD) for one treatment and only published
+aggregate data (AgD) for the other.</p>
+<p>ML-UMR fits an outcome model to the IPD and <strong>integrates it
+over the comparator study’s covariate distribution</strong>,
+transporting the comparison to a decision-relevant population while
+adjusting for cross-trial covariate imbalance. It extends multilevel
+network meta-regression (ML-NMR) <span class="citation">(<a href="#ref-Phillippo2020">Phillippo et al. 2020</a>)</span> to the
+unanchored, two-treatment case; the method and its assumptions are
+developed by Chandler and Ishak for binary <span class="citation">(<a href="#ref-ChandlerIshak2025">Chandler and Ishak 2025</a>)</span> and
+survival <span class="citation">(<a href="#ref-ChandlerIshak2026">Chandler and Ishak 2026</a>)</span>
+outcomes.</p>
+<p>The current package is two-treatment: one index treatment (IPD)
+versus one comparator (AgD). Multi-treatment unanchored networks are out
+of scope.</p>
+<p>ML-UMR should only be used for fully unanchored, single-arm
+comparisons. The worked examples in these vignettes use data from
+randomized trials, and to illustrate the method they create hypothetical
+single-arm trials by dropping a common reference arm (or by treating a
+trial’s randomized arms as separate sources), which leaves fully
+disconnected evidence. In practice, randomized trials should never be
+analyzed this way: ML-NMR <span class="citation">(<a href="#ref-Phillippo2020">Phillippo et al. 2020</a>)</span> (for example
+with the <code>multinma</code> package) or another appropriate method
+should be used for them.</p>
 </div>
-<div id="when-to-use-mlumr" class="section level2">
-<h2>When to use mlumr</h2>
-<p>Use mlumr when you need to compare two treatments that have never
-been directly compared in the same trial (disconnected network), and you
-have:</p>
-<ul>
-<li><strong>IPD</strong> from one trial (index treatment)</li>
-<li><strong>AgD</strong> from another trial (comparator treatment)</li>
-<li>Shared covariates between populations</li>
-<li>Binary, continuous, or count outcomes</li>
-</ul>
+<div id="supported-outcome-families" class="section level2">
+<h2>Supported outcome families</h2>
+<table>
+<thead>
+<tr class="header">
+<th>Family</th>
+<th>Outcome</th>
+<th>Worked-example vignette</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>binomial</td>
+<td>binary (0/1) response</td>
+<td><code>vignette(&quot;binary-outcomes&quot;)</code></td>
+</tr>
+<tr class="even">
+<td>normal</td>
+<td>continuous</td>
+<td><code>vignette(&quot;continuous-outcomes&quot;)</code></td>
+</tr>
+<tr class="odd">
+<td>poisson</td>
+<td>counts with exposure</td>
+<td><code>vignette(&quot;count-outcomes&quot;)</code></td>
+</tr>
+<tr class="even">
+<td>survival</td>
+<td>time-to-event</td>
+<td><code>vignette(&quot;survival-outcomes&quot;)</code></td>
+</tr>
+</tbody>
+</table>
 </div>
-<div id="installation" class="section level2">
-<h2>Installation</h2>
-<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="co"># From GitHub (development version)</span></span>
-<span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a><span class="co"># install.packages(&quot;remotes&quot;)</span></span>
-<span id="cb1-3"><a href="#cb1-3" tabindex="-1"></a>remotes<span class="sc">::</span><span class="fu">install_github</span>(<span class="st">&quot;choxos/mlumr&quot;</span>)</span></code></pre></div>
-</div>
-<div id="quick-start" class="section level2">
-<h2>Quick start</h2>
-<p>The pipeline below runs on toy data so every chunk is self-contained.
-For a more detailed worked analysis, see
-<code>vignette(&quot;worked-example&quot;)</code>.</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a><span class="fu">library</span>(mlumr)</span>
-<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">2026</span>)</span>
-<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a></span>
-<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a><span class="co"># Toy IPD: trial A (index treatment, binary outcome)</span></span>
-<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a>n_a <span class="ot">&lt;-</span> <span class="dv">300</span></span>
-<span id="cb2-6"><a href="#cb2-6" tabindex="-1"></a>trial_a_data <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
-<span id="cb2-7"><a href="#cb2-7" tabindex="-1"></a>  <span class="at">trt      =</span> <span class="st">&quot;Drug_A&quot;</span>,</span>
-<span id="cb2-8"><a href="#cb2-8" tabindex="-1"></a>  <span class="at">response =</span> <span class="fu">rbinom</span>(n_a, <span class="dv">1</span>, <span class="fl">0.55</span>),</span>
-<span id="cb2-9"><a href="#cb2-9" tabindex="-1"></a>  <span class="at">age_cat  =</span> <span class="fu">rbinom</span>(n_a, <span class="dv">1</span>, <span class="fl">0.40</span>),</span>
-<span id="cb2-10"><a href="#cb2-10" tabindex="-1"></a>  <span class="at">sex      =</span> <span class="fu">rbinom</span>(n_a, <span class="dv">1</span>, <span class="fl">0.55</span>)</span>
-<span id="cb2-11"><a href="#cb2-11" tabindex="-1"></a>)</span>
-<span id="cb2-12"><a href="#cb2-12" tabindex="-1"></a></span>
-<span id="cb2-13"><a href="#cb2-13" tabindex="-1"></a><span class="co"># Toy AgD: trial B (comparator treatment)</span></span>
-<span id="cb2-14"><a href="#cb2-14" tabindex="-1"></a>trial_b_data <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
-<span id="cb2-15"><a href="#cb2-15" tabindex="-1"></a>  <span class="at">trt           =</span> <span class="st">&quot;Drug_B&quot;</span>,</span>
-<span id="cb2-16"><a href="#cb2-16" tabindex="-1"></a>  <span class="at">n_total       =</span> <span class="dv">400</span>,</span>
-<span id="cb2-17"><a href="#cb2-17" tabindex="-1"></a>  <span class="at">n_events      =</span> <span class="dv">160</span>,</span>
-<span id="cb2-18"><a href="#cb2-18" tabindex="-1"></a>  <span class="at">age_cat_mean  =</span> <span class="fl">0.35</span>,</span>
-<span id="cb2-19"><a href="#cb2-19" tabindex="-1"></a>  <span class="at">sex_mean      =</span> <span class="fl">0.50</span></span>
-<span id="cb2-20"><a href="#cb2-20" tabindex="-1"></a>)</span></code></pre></div>
-<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a><span class="co"># 1. Prepare IPD</span></span>
-<span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a>ipd <span class="ot">&lt;-</span> <span class="fu">set_ipd</span>(</span>
-<span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a>  <span class="at">data =</span> trial_a_data,</span>
-<span id="cb3-4"><a href="#cb3-4" tabindex="-1"></a>  <span class="at">treatment =</span> <span class="st">&quot;trt&quot;</span>,</span>
-<span id="cb3-5"><a href="#cb3-5" tabindex="-1"></a>  <span class="at">outcome =</span> <span class="st">&quot;response&quot;</span>,</span>
-<span id="cb3-6"><a href="#cb3-6" tabindex="-1"></a>  <span class="at">covariates =</span> <span class="fu">c</span>(<span class="st">&quot;age_cat&quot;</span>, <span class="st">&quot;sex&quot;</span>)</span>
-<span id="cb3-7"><a href="#cb3-7" tabindex="-1"></a>)</span>
-<span id="cb3-8"><a href="#cb3-8" tabindex="-1"></a></span>
-<span id="cb3-9"><a href="#cb3-9" tabindex="-1"></a><span class="co"># 2. Prepare AgD</span></span>
-<span id="cb3-10"><a href="#cb3-10" tabindex="-1"></a>agd <span class="ot">&lt;-</span> <span class="fu">set_agd</span>(</span>
-<span id="cb3-11"><a href="#cb3-11" tabindex="-1"></a>  <span class="at">data =</span> trial_b_data,</span>
-<span id="cb3-12"><a href="#cb3-12" tabindex="-1"></a>  <span class="at">treatment =</span> <span class="st">&quot;trt&quot;</span>,</span>
-<span id="cb3-13"><a href="#cb3-13" tabindex="-1"></a>  <span class="at">outcome_n =</span> <span class="st">&quot;n_total&quot;</span>,</span>
-<span id="cb3-14"><a href="#cb3-14" tabindex="-1"></a>  <span class="at">outcome_r =</span> <span class="st">&quot;n_events&quot;</span>,</span>
-<span id="cb3-15"><a href="#cb3-15" tabindex="-1"></a>  <span class="at">cov_means =</span> <span class="fu">c</span>(<span class="st">&quot;age_cat_mean&quot;</span>, <span class="st">&quot;sex_mean&quot;</span>),</span>
-<span id="cb3-16"><a href="#cb3-16" tabindex="-1"></a>  <span class="at">cov_types =</span> <span class="fu">c</span>(<span class="st">&quot;binary&quot;</span>, <span class="st">&quot;binary&quot;</span>)</span>
-<span id="cb3-17"><a href="#cb3-17" tabindex="-1"></a>)</span>
-<span id="cb3-18"><a href="#cb3-18" tabindex="-1"></a></span>
-<span id="cb3-19"><a href="#cb3-19" tabindex="-1"></a><span class="co"># 3. Combine</span></span>
-<span id="cb3-20"><a href="#cb3-20" tabindex="-1"></a>dat <span class="ot">&lt;-</span> <span class="fu">combine_data</span>(ipd, agd)</span>
-<span id="cb3-21"><a href="#cb3-21" tabindex="-1"></a></span>
-<span id="cb3-22"><a href="#cb3-22" tabindex="-1"></a><span class="co"># 4. Add integration points (needed for ML-UMR)</span></span>
-<span id="cb3-23"><a href="#cb3-23" tabindex="-1"></a>dat <span class="ot">&lt;-</span> <span class="fu">add_integration</span>(</span>
-<span id="cb3-24"><a href="#cb3-24" tabindex="-1"></a>  dat,</span>
-<span id="cb3-25"><a href="#cb3-25" tabindex="-1"></a>  <span class="at">n_int =</span> <span class="dv">64</span>,</span>
-<span id="cb3-26"><a href="#cb3-26" tabindex="-1"></a>  <span class="at">age_cat =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> age_cat_mean),</span>
-<span id="cb3-27"><a href="#cb3-27" tabindex="-1"></a>  <span class="at">sex =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> sex_mean)</span>
-<span id="cb3-28"><a href="#cb3-28" tabindex="-1"></a>)</span></code></pre></div>
-<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a><span class="co"># 5. Fit ML-UMR</span></span>
-<span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a>fit_spfa <span class="ot">&lt;-</span> <span class="fu">mlumr</span>(</span>
-<span id="cb4-3"><a href="#cb4-3" tabindex="-1"></a>  dat, <span class="at">model =</span> <span class="st">&quot;spfa&quot;</span>,</span>
-<span id="cb4-4"><a href="#cb4-4" tabindex="-1"></a>  <span class="at">chains =</span> <span class="dv">2</span>, <span class="at">iter =</span> <span class="dv">500</span>, <span class="at">warmup =</span> <span class="dv">250</span>,</span>
-<span id="cb4-5"><a href="#cb4-5" tabindex="-1"></a>  <span class="at">seed =</span> <span class="dv">42</span>, <span class="at">refresh =</span> <span class="dv">0</span>, <span class="at">verbose =</span> <span class="cn">FALSE</span></span>
-<span id="cb4-6"><a href="#cb4-6" tabindex="-1"></a>)</span>
-<span id="cb4-7"><a href="#cb4-7" tabindex="-1"></a>fit_relaxed <span class="ot">&lt;-</span> <span class="fu">mlumr</span>(</span>
-<span id="cb4-8"><a href="#cb4-8" tabindex="-1"></a>  dat, <span class="at">model =</span> <span class="st">&quot;relaxed&quot;</span>,</span>
-<span id="cb4-9"><a href="#cb4-9" tabindex="-1"></a>  <span class="at">chains =</span> <span class="dv">2</span>, <span class="at">iter =</span> <span class="dv">500</span>, <span class="at">warmup =</span> <span class="dv">250</span>,</span>
-<span id="cb4-10"><a href="#cb4-10" tabindex="-1"></a>  <span class="at">seed =</span> <span class="dv">43</span>, <span class="at">refresh =</span> <span class="dv">0</span>, <span class="at">verbose =</span> <span class="cn">FALSE</span></span>
-<span id="cb4-11"><a href="#cb4-11" tabindex="-1"></a>)</span>
-<span id="cb4-12"><a href="#cb4-12" tabindex="-1"></a></span>
-<span id="cb4-13"><a href="#cb4-13" tabindex="-1"></a><span class="co"># 6. Compare</span></span>
-<span id="cb4-14"><a href="#cb4-14" tabindex="-1"></a><span class="fu">summary</span>(fit_spfa)</span>
-<span id="cb4-15"><a href="#cb4-15" tabindex="-1"></a><span class="co">#&gt; ML-UMR Model Summary</span></span>
-<span id="cb4-16"><a href="#cb4-16" tabindex="-1"></a><span class="co">#&gt; ====================</span></span>
-<span id="cb4-17"><a href="#cb4-17" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb4-18"><a href="#cb4-18" tabindex="-1"></a><span class="co">#&gt; Model: SPFA </span></span>
-<span id="cb4-19"><a href="#cb4-19" tabindex="-1"></a><span class="co">#&gt; Family: Binary </span></span>
-<span id="cb4-20"><a href="#cb4-20" tabindex="-1"></a><span class="co">#&gt; Link: logit </span></span>
-<span id="cb4-21"><a href="#cb4-21" tabindex="-1"></a><span class="co">#&gt; Engine: rstan </span></span>
-<span id="cb4-22"><a href="#cb4-22" tabindex="-1"></a><span class="co">#&gt; Treatments: Drug_A (IPD) vs Drug_B (AgD)</span></span>
-<span id="cb4-23"><a href="#cb4-23" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb4-24"><a href="#cb4-24" tabindex="-1"></a><span class="co">#&gt; MCMC Diagnostics:</span></span>
-<span id="cb4-25"><a href="#cb4-25" tabindex="-1"></a><span class="co">#&gt;   Divergent transitions: 0 </span></span>
-<span id="cb4-26"><a href="#cb4-26" tabindex="-1"></a><span class="co">#&gt;   Max treedepth hits: 0 </span></span>
-<span id="cb4-27"><a href="#cb4-27" tabindex="-1"></a><span class="co">#&gt;   Max Rhat: 1.016 </span></span>
-<span id="cb4-28"><a href="#cb4-28" tabindex="-1"></a><span class="co">#&gt;   Min ESS: 149 </span></span>
-<span id="cb4-29"><a href="#cb4-29" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb4-30"><a href="#cb4-30" tabindex="-1"></a><span class="co">#&gt; Intercepts (logit scale):</span></span>
-<span id="cb4-31"><a href="#cb4-31" tabindex="-1"></a><span class="co">#&gt;       variable        mean        sd       2.5%      97.5%     Rhat</span></span>
-<span id="cb4-32"><a href="#cb4-32" tabindex="-1"></a><span class="co">#&gt;       mu_index  0.01040724 0.1915921 -0.3307466  0.3815756 1.007205</span></span>
-<span id="cb4-33"><a href="#cb4-33" tabindex="-1"></a><span class="co">#&gt;  mu_comparator -0.63607867 0.1700693 -0.9595353 -0.3209510 1.015403</span></span>
-<span id="cb4-34"><a href="#cb4-34" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb4-35"><a href="#cb4-35" tabindex="-1"></a><span class="co">#&gt; Regression Coefficients:</span></span>
-<span id="cb4-36"><a href="#cb4-36" tabindex="-1"></a><span class="co">#&gt;  variable       mean        sd       2.5%     97.5%      Rhat</span></span>
-<span id="cb4-37"><a href="#cb4-37" tabindex="-1"></a><span class="co">#&gt;   beta[1] -0.1538366 0.2480568 -0.6437745 0.3240322 0.9976325</span></span>
-<span id="cb4-38"><a href="#cb4-38" tabindex="-1"></a><span class="co">#&gt;   beta[2]  0.5748965 0.2306527  0.1285506 1.0311792 1.0164810</span></span>
-<span id="cb4-39"><a href="#cb4-39" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb4-40"><a href="#cb4-40" tabindex="-1"></a><span class="co">#&gt; Marginal Treatment Effects:</span></span>
-<span id="cb4-41"><a href="#cb4-41" tabindex="-1"></a><span class="co">#&gt;   Log Odds Ratios:</span></span>
-<span id="cb4-42"><a href="#cb4-42" tabindex="-1"></a><span class="co">#&gt;        variable      mean        sd      2.5%     97.5%</span></span>
-<span id="cb4-43"><a href="#cb4-43" tabindex="-1"></a><span class="co">#&gt;       lor_index 0.6293387 0.1529275 0.3198898 0.9268537</span></span>
-<span id="cb4-44"><a href="#cb4-44" tabindex="-1"></a><span class="co">#&gt;  lor_comparator 0.6296880 0.1530364 0.3199753 0.9284606</span></span>
-<span id="cb4-45"><a href="#cb4-45" tabindex="-1"></a><span class="co">#&gt;   Risk Differences:</span></span>
-<span id="cb4-46"><a href="#cb4-46" tabindex="-1"></a><span class="co">#&gt;       variable      mean         sd       2.5%     97.5%</span></span>
-<span id="cb4-47"><a href="#cb4-47" tabindex="-1"></a><span class="co">#&gt;       rd_index 0.1553421 0.03716764 0.07954897 0.2274495</span></span>
-<span id="cb4-48"><a href="#cb4-48" tabindex="-1"></a><span class="co">#&gt;  rd_comparator 0.1553186 0.03719440 0.07955894 0.2276036</span></span>
-<span id="cb4-49"><a href="#cb4-49" tabindex="-1"></a><span class="co">#&gt;   Risk Ratios:</span></span>
-<span id="cb4-50"><a href="#cb4-50" tabindex="-1"></a><span class="co">#&gt;       variable     mean        sd     2.5%    97.5%</span></span>
-<span id="cb4-51"><a href="#cb4-51" tabindex="-1"></a><span class="co">#&gt;       rr_index 1.390010 0.1108687 1.182237 1.622135</span></span>
-<span id="cb4-52"><a href="#cb4-52" tabindex="-1"></a><span class="co">#&gt;  rr_comparator 1.394113 0.1115285 1.182954 1.627734</span></span>
-<span id="cb4-53"><a href="#cb4-53" tabindex="-1"></a><span class="fu">compare_models</span>(fit_spfa, fit_relaxed)</span>
-<span id="cb4-54"><a href="#cb4-54" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb4-55"><a href="#cb4-55" tabindex="-1"></a><span class="co">#&gt; Model Comparison (DIC)</span></span>
-<span id="cb4-56"><a href="#cb4-56" tabindex="-1"></a><span class="co">#&gt; ======================</span></span>
-<span id="cb4-57"><a href="#cb4-57" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb4-58"><a href="#cb4-58" tabindex="-1"></a><span class="co">#&gt;         Model    DIC   pD Delta_DIC</span></span>
-<span id="cb4-59"><a href="#cb4-59" tabindex="-1"></a><span class="co">#&gt;  Relaxed SPFA 419.68 3.88      0.00</span></span>
-<span id="cb4-60"><a href="#cb4-60" tabindex="-1"></a><span class="co">#&gt;          SPFA 420.17 4.05      0.48</span></span>
-<span id="cb4-61"><a href="#cb4-61" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb4-62"><a href="#cb4-62" tabindex="-1"></a><span class="co">#&gt; Lower DIC = better fit. Delta_DIC &gt; 5 is a rough heuristic for</span></span>
-<span id="cb4-63"><a href="#cb4-63" tabindex="-1"></a><span class="co">#&gt; meaningful difference, not a formally calibrated threshold.</span></span>
-<span id="cb4-64"><a href="#cb4-64" tabindex="-1"></a><span class="co">#&gt; DIC should not be the sole basis for model selection.</span></span>
-<span id="cb4-65"><a href="#cb4-65" tabindex="-1"></a></span>
-<span id="cb4-66"><a href="#cb4-66" tabindex="-1"></a><span class="co"># 7. Frequentist benchmarks</span></span>
-<span id="cb4-67"><a href="#cb4-67" tabindex="-1"></a>naive_result <span class="ot">&lt;-</span> <span class="fu">naive</span>(dat)</span>
-<span id="cb4-68"><a href="#cb4-68" tabindex="-1"></a>stc_result <span class="ot">&lt;-</span> <span class="fu">stc</span>(dat)</span>
-<span id="cb4-69"><a href="#cb4-69" tabindex="-1"></a><span class="fu">print</span>(naive_result)</span>
-<span id="cb4-70"><a href="#cb4-70" tabindex="-1"></a><span class="co">#&gt; Naive Unadjusted Indirect Comparison</span></span>
-<span id="cb4-71"><a href="#cb4-71" tabindex="-1"></a><span class="co">#&gt; =====================================</span></span>
-<span id="cb4-72"><a href="#cb4-72" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb4-73"><a href="#cb4-73" tabindex="-1"></a><span class="co">#&gt; Treatments: Drug_A vs Drug_B </span></span>
-<span id="cb4-74"><a href="#cb4-74" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb4-75"><a href="#cb4-75" tabindex="-1"></a><span class="co">#&gt; Event rates:</span></span>
-<span id="cb4-76"><a href="#cb4-76" tabindex="-1"></a><span class="co">#&gt;   Index (IPD):      0.560 (168/300)</span></span>
-<span id="cb4-77"><a href="#cb4-77" tabindex="-1"></a><span class="co">#&gt;   Comparator (AgD): 0.400 (160/400)</span></span>
-<span id="cb4-78"><a href="#cb4-78" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb4-79"><a href="#cb4-79" tabindex="-1"></a><span class="co">#&gt; Log Odds Ratio: 0.6466 (SE: 0.1547)</span></span>
-<span id="cb4-80"><a href="#cb4-80" tabindex="-1"></a><span class="co">#&gt; 95% CI: [0.3433, 0.9499]</span></span>
-<span id="cb4-81"><a href="#cb4-81" tabindex="-1"></a><span class="fu">print</span>(stc_result)</span>
-<span id="cb4-82"><a href="#cb4-82" tabindex="-1"></a><span class="co">#&gt; Simulated Treatment Comparison (G-computation)</span></span>
-<span id="cb4-83"><a href="#cb4-83" tabindex="-1"></a><span class="co">#&gt; ===============================================</span></span>
-<span id="cb4-84"><a href="#cb4-84" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb4-85"><a href="#cb4-85" tabindex="-1"></a><span class="co">#&gt; Treatments: Drug_A vs Drug_B </span></span>
-<span id="cb4-86"><a href="#cb4-86" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb4-87"><a href="#cb4-87" tabindex="-1"></a><span class="co">#&gt; Marginalized P(Y=1|index trt, comp pop): 0.5555</span></span>
-<span id="cb4-88"><a href="#cb4-88" tabindex="-1"></a><span class="co">#&gt; Observed P(Y=1|comp trt, comp pop):      0.4000</span></span>
-<span id="cb4-89"><a href="#cb4-89" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb4-90"><a href="#cb4-90" tabindex="-1"></a><span class="co">#&gt; Log Odds Ratio: 0.6285 (SE: 0.1549)</span></span>
-<span id="cb4-91"><a href="#cb4-91" tabindex="-1"></a><span class="co">#&gt; 95% CI: [0.3250, 0.9321]</span></span>
-<span id="cb4-92"><a href="#cb4-92" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb4-93"><a href="#cb4-93" tabindex="-1"></a><span class="co">#&gt; Outcome model coefficients:</span></span>
-<span id="cb4-94"><a href="#cb4-94" tabindex="-1"></a><span class="co">#&gt; (Intercept)     age_cat         sex </span></span>
-<span id="cb4-95"><a href="#cb4-95" tabindex="-1"></a><span class="co">#&gt;      0.0133     -0.1527      0.5697</span></span></code></pre></div>
-<p>Before using results in a real analysis, inspect integration quality
-and posterior diagnostics:</p>
-<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a><span class="fu">check_integration</span>(</span>
-<span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a>  dat,</span>
-<span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a>  <span class="at">age_cat =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> age_cat_mean),</span>
-<span id="cb5-4"><a href="#cb5-4" tabindex="-1"></a>  <span class="at">sex =</span> <span class="fu">distr</span>(qbern, <span class="at">prob =</span> sex_mean)</span>
-<span id="cb5-5"><a href="#cb5-5" tabindex="-1"></a>)</span>
-<span id="cb5-6"><a href="#cb5-6" tabindex="-1"></a><span class="co">#&gt; Integration check: n_int = 64 vs 128</span></span>
-<span id="cb5-7"><a href="#cb5-7" tabindex="-1"></a><span class="co">#&gt; Marginals -- max relative difference: 0.0476</span></span>
-<span id="cb5-8"><a href="#cb5-8" tabindex="-1"></a><span class="co">#&gt; </span><span class="al">CAUTION</span><span class="co">: 1-5%% marginal relative difference. Consider increasing n_int.</span></span>
-<span id="cb5-9"><a href="#cb5-9" tabindex="-1"></a><span class="co">#&gt; Joint -- max |cor(current) - cor(doubled)|: 0.0012</span></span>
-<span id="cb5-10"><a href="#cb5-10" tabindex="-1"></a><span class="co">#&gt; OK joint: pairwise correlations agree within 0.05.</span></span>
-<span id="cb5-11"><a href="#cb5-11" tabindex="-1"></a><span class="fu">prior_summary</span>(fit_spfa)</span>
-<span id="cb5-12"><a href="#cb5-12" tabindex="-1"></a><span class="co">#&gt; Priors for ML-UMR Fit</span></span>
-<span id="cb5-13"><a href="#cb5-13" tabindex="-1"></a><span class="co">#&gt; =====================</span></span>
-<span id="cb5-14"><a href="#cb5-14" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb5-15"><a href="#cb5-15" tabindex="-1"></a><span class="co">#&gt; Intercepts (mu_index, mu_comparator):</span></span>
-<span id="cb5-16"><a href="#cb5-16" tabindex="-1"></a><span class="co">#&gt;   normal(0, 10)</span></span>
-<span id="cb5-17"><a href="#cb5-17" tabindex="-1"></a><span class="co">#&gt;   (package default, mlumr 0.1.0)</span></span>
-<span id="cb5-18"><a href="#cb5-18" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb5-19"><a href="#cb5-19" tabindex="-1"></a><span class="co">#&gt; Regression coefficients (beta):</span></span>
-<span id="cb5-20"><a href="#cb5-20" tabindex="-1"></a><span class="co">#&gt;   normal(0, 2.5) applied to all 2 covariate(s)</span></span>
-<span id="cb5-21"><a href="#cb5-21" tabindex="-1"></a><span class="co">#&gt;   (package default, mlumr 0.1.0)</span></span>
-<span id="cb5-22"><a href="#cb5-22" tabindex="-1"></a>fit_spfa<span class="sc">$</span>diagnostics</span>
-<span id="cb5-23"><a href="#cb5-23" tabindex="-1"></a><span class="co">#&gt; $n_divergent</span></span>
-<span id="cb5-24"><a href="#cb5-24" tabindex="-1"></a><span class="co">#&gt; [1] 0</span></span>
-<span id="cb5-25"><a href="#cb5-25" tabindex="-1"></a><span class="co">#&gt; </span></span>
-<span id="cb5-26"><a href="#cb5-26" tabindex="-1"></a><span class="co">#&gt; $n_max_treedepth</span></span>
-<span id="cb5-27"><a href="#cb5-27" tabindex="-1"></a><span class="co">#&gt; [1] 0</span></span>
-<span id="cb5-28"><a href="#cb5-28" tabindex="-1"></a><span class="fu">max</span>(fit_spfa<span class="sc">$</span>summary<span class="sc">$</span>Rhat, <span class="at">na.rm =</span> <span class="cn">TRUE</span>)</span>
-<span id="cb5-29"><a href="#cb5-29" tabindex="-1"></a><span class="co">#&gt; [1] 1.016481</span></span>
-<span id="cb5-30"><a href="#cb5-30" tabindex="-1"></a><span class="fu">min</span>(fit_spfa<span class="sc">$</span>summary<span class="sc">$</span>n_eff, <span class="at">na.rm =</span> <span class="cn">TRUE</span>)</span>
-<span id="cb5-31"><a href="#cb5-31" tabindex="-1"></a><span class="co">#&gt; [1] 148.6844</span></span></code></pre></div>
-</div>
-<div id="choosing-a-method" class="section level2">
-<h2>Choosing a method</h2>
+<div id="the-four-methods" class="section level2">
+<h2>The four methods</h2>
+<p>mlumr provides four estimators behind one data interface, so you can
+run them side by side as a sensitivity analysis:</p>
 <table>
 <thead>
 <tr class="header">
 <th>Method</th>
-<th>Adjusts for covariates?</th>
+<th>Adjusts covariates?</th>
 <th>Effect modification?</th>
 <th>Inference</th>
 </tr>
@@ -575,41 +445,99 @@ and posterior diagnostics:</p>
 <tbody>
 <tr class="odd">
 <td>ML-UMR SPFA</td>
-<td>Yes</td>
-<td>No (shared betas)</td>
+<td>yes</td>
+<td>no (shared coefficients)</td>
 <td>Bayesian</td>
 </tr>
 <tr class="even">
-<td>ML-UMR Relaxed</td>
-<td>Yes</td>
-<td>Yes (treatment-specific betas)</td>
+<td>ML-UMR relaxed</td>
+<td>yes</td>
+<td>yes (treatment-specific)</td>
 <td>Bayesian</td>
 </tr>
 <tr class="odd">
 <td>STC</td>
-<td>Yes (outcome model only)</td>
-<td>No</td>
-<td>Frequentist</td>
+<td>yes (outcome model)</td>
+<td>no</td>
+<td>frequentist</td>
 </tr>
 <tr class="even">
 <td>Naive</td>
-<td>No</td>
-<td>N/A</td>
-<td>Frequentist</td>
+<td>no</td>
+<td>n/a</td>
+<td>frequentist (benchmark)</td>
 </tr>
 </tbody>
 </table>
-<ul>
-<li><strong>ML-UMR SPFA</strong> is appropriate when prognostic factors
-affect both treatments equally.</li>
-<li><strong>ML-UMR Relaxed</strong> is appropriate when you suspect
-treatment-by-covariate interactions (effect modification).</li>
-<li><strong>STC</strong> adjusts for imbalances through an outcome model
-and uses integration points when available; best when treatment effects
-do not vary with covariates.</li>
-<li><strong>Naive</strong> serves as a benchmark only; do not use for
-inference in the presence of cross-trial differences.</li>
-</ul>
+</div>
+<div id="what-unanchored-does-and-does-not-buy-you" class="section level2">
+<h2>What “unanchored” does and does not buy you</h2>
+<p>Removing the common-arm requirement is what makes single-arm
+comparisons possible, but it does <strong>not</strong> remove the need
+for assumptions. Unanchored ML-UMR still relies on <strong>conditional
+constancy of the absolute outcome</strong>: that, conditional on the
+modelled covariates, the index outcome model transports to the
+comparator population (and, under the default SPFA, that prognostic
+effects are shared across treatments). These assumptions are strong and
+largely untestable, so always report the naive benchmark and sensitivity
+analyses (<code>vignette(&quot;choosing-a-method&quot;)</code>).</p>
+</div>
+<div id="installation" class="section level2">
+<h2>Installation</h2>
+<p>Install the released version from CRAN, or the development version
+from GitHub:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">install.packages</span>(<span class="st">&quot;mlumr&quot;</span>)            <span class="co"># from CRAN</span></span>
+<span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a><span class="co"># remotes::install_github(&quot;choxos/mlumr&quot;)   # development version</span></span></code></pre></div>
+</div>
+<div id="the-workflow-at-a-glance" class="section level2">
+<h2>The workflow at a glance</h2>
+<p>Every analysis follows the same four steps, then a fit:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a><span class="fu">library</span>(mlumr)</span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a></span>
+<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a>ipd <span class="ot">&lt;-</span> <span class="fu">set_ipd</span>(...)                  <span class="co"># individual patient data (index)</span></span>
+<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a>agd <span class="ot">&lt;-</span> <span class="fu">set_agd</span>(...)                  <span class="co"># aggregate data (comparator)</span></span>
+<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a>dat <span class="ot">&lt;-</span> <span class="fu">combine_data</span>(ipd, agd)        <span class="co"># combine</span></span>
+<span id="cb2-6"><a href="#cb2-6" tabindex="-1"></a>dat <span class="ot">&lt;-</span> <span class="fu">add_integration</span>(dat, ...)     <span class="co"># quasi-Monte Carlo integration points</span></span>
+<span id="cb2-7"><a href="#cb2-7" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">mlumr</span>(dat, <span class="at">model =</span> <span class="st">&quot;spfa&quot;</span>)    <span class="co"># fit the Bayesian model</span></span></code></pre></div>
+<p>The exact <code>set_ipd()</code> / <code>set_agd()</code> arguments
+depend on the outcome family; each per-outcome vignette shows a
+complete, runnable example.</p>
+</div>
+<div id="where-to-go-next" class="section level2">
+<h2>Where to go next</h2>
+<ol style="list-style-type: decimal">
+<li><code>vignette(&quot;data-preparation&quot;)</code>, the four-step pipeline
+and the numerical integration that powers population adjustment
+(covariate distributions, correlation, diagnostics).</li>
+<li><strong>One outcome-family worked example</strong>,
+<code>vignette(&quot;binary-outcomes&quot;)</code>,
+<code>vignette(&quot;continuous-outcomes&quot;)</code>,
+<code>vignette(&quot;count-outcomes&quot;)</code>, or
+<code>vignette(&quot;survival-outcomes&quot;)</code>.</li>
+<li><code>vignette(&quot;fitting-and-diagnostics&quot;)</code>, sampler control,
+priors, and MCMC diagnostics.</li>
+<li><code>vignette(&quot;choosing-a-method&quot;)</code>, assumptions, model
+comparison, and a decision guide for which estimate to report.</li>
+</ol>
+<div id="refs" class="references csl-bib-body hanging-indent">
+<div id="ref-ChandlerIshak2025" class="csl-entry">
+Chandler, C., and K. J. Ishak. 2025. <em>Anchors Away: Navigating
+Unanchored Indirect Comparisons with Multilevel Unanchored
+Meta-Regression</em>. ISPOR Europe, Glasgow, UK; abstract MSR28. <a href="https://www.valueinhealthjournal.com/article/S1098-3015(25)05944-3/abstract">https://www.valueinhealthjournal.com/article/S1098-3015(25)05944-3/abstract</a>.
+</div>
+<div id="ref-ChandlerIshak2026" class="csl-entry">
+Chandler, C., and K. J. Ishak. 2026. <em>Surviving Unanchored Indirect
+Comparisons: An Extension of Multilevel Unanchored Meta-Regression
+(<span>ML-UMR</span>) for Survival Analyses</em>. ISPOR, Philadelphia,
+PA, USA; abstract MSR131; Value in Health. <a href="https://www.ispor.org/heor-resources/presentations-database/presentation-cti/ispor-2026/poster-session-3-3/surviving-unanchored-indirect-comparisons-an-extension-of-multilevel-unanchored-meta-regression-ml-umr-for-survival-analyses">https://www.ispor.org/heor-resources/presentations-database/presentation-cti/ispor-2026/poster-session-3-3/surviving-unanchored-indirect-comparisons-an-extension-of-multilevel-unanchored-meta-regression-ml-umr-for-survival-analyses</a>.
+</div>
+<div id="ref-Phillippo2020" class="csl-entry">
+Phillippo, D. M., S. Dias, A. E. Ades, et al. 2020. <span>“Multilevel
+Network Meta-Regression for Population-Adjusted Treatment
+Comparisons.”</span> <em>Journal of the Royal Statistical Society:
+Series A (Statistics in Society)</em> 183 (3): 1189–210. <a href="https://doi.org/10.1111/rssa.12579">https://doi.org/10.1111/rssa.12579</a>.
+</div>
+</div>
 </div>
 
 
